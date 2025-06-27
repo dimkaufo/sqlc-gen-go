@@ -5,15 +5,23 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 	"github.com/sqlc-dev/plugin-sdk-go/plugin"
+	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 )
 
 type Struct struct {
 	Table   *plugin.Identifier
 	Name    string
+	Package string
 	Fields  []Field
 	Comment string
+}
+
+func (s Struct) Type() string {
+	if s.Package != "" {
+		return s.Package + "." + s.Name
+	}
+	return s.Name
 }
 
 func StructName(name string, options *opts.Options) string {
