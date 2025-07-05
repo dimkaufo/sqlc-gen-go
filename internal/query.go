@@ -267,6 +267,11 @@ type Query struct {
 	Arg          QueryValue
 	// Used for :copyfrom
 	Table *plugin.Identifier
+	// Used for nested grouping
+	HasNestedConfig          bool   // Whether this query has nested configuration
+	GroupFunctionName        string // Name of the group function to call (e.g., "GroupGetAuthors")
+	GroupReturnType          string // Return type of the group function (e.g., "GetAuthorsGroup")
+	EmitResultStructPointers bool   // Whether to emit pointer types for result structs
 }
 
 func (q Query) hasRetType() bool {
@@ -293,4 +298,39 @@ func (q Query) TableIdentifierForMySQL() string {
 		}
 	}
 	return strings.Join(escapedNames, ".")
+}
+
+// Helper methods for nested grouping
+func (q Query) ShouldCallGroupFunction() bool {
+	return q.HasNestedConfig && (q.Cmd == metadata.CmdMany || q.Cmd == metadata.CmdOne)
+}
+
+func (q Query) FinalReturnType() string {
+	if q.ShouldCallGroupFunction() {
+		if q.EmitResultStructPointers {
+			return "*" + q.GroupReturnType
+		}
+		return q.GroupReturnType
+	}
+	return q.Ret.DefineType()
+}
+
+func (q Query) FinalSliceReturnType() string {
+	if q.ShouldCallGroupFunction() {
+		if q.EmitResultStructPointers {
+			return "[]*" + q.GroupReturnType
+		}
+		return "[]" + q.GroupReturnType
+	}
+	return "[]" + q.Ret.DefineType()
+}
+
+func (q Query) FinalSingleReturnType() string {
+	if q.ShouldCallGroupFunction() {
+		if q.EmitResultStructPointers {
+			return "*" + q.GroupReturnType
+		}
+		return q.GroupReturnType
+	}
+	return q.Ret.DefineType()
 }

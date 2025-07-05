@@ -326,6 +326,23 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			}
 		}
 
+		// Check if this query has nested configuration
+		for _, nestedConfig := range options.Nested {
+			if nestedConfig.Query == gq.MethodName {
+				gq.HasNestedConfig = true
+				gq.GroupFunctionName = "Group" + gq.MethodName
+				// Determine the group return type based on nested config
+				if nestedConfig.StructRoot != "" {
+					gq.GroupReturnType = nestedConfig.StructRoot
+				} else {
+					gq.GroupReturnType = gq.MethodName + "Group"
+				}
+				// Set pointer configuration for result structs
+				gq.EmitResultStructPointers = options.EmitResultStructPointers
+				break
+			}
+		}
+
 		qs = append(qs, gq)
 	}
 	sort.Slice(qs, func(i, j int) bool { return qs[i].MethodName < qs[j].MethodName })

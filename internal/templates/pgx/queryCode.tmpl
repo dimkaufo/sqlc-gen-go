@@ -27,17 +27,38 @@ type {{.Ret.Type}} struct { {{- range .Ret.Struct.Fields}}
 {{range .Comments}}//{{.}}
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
-func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ({{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
 	row := db.QueryRow(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- else -}}
-func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
 	row := q.db.QueryRow(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- end}}
 	{{- if or (ne .Arg.Pair .Ret.Pair) (ne .Arg.DefineType .Ret.DefineType) }}
 	var {{.Ret.Name}} {{.Ret.Type}}
 	{{- end}}
 	err := row.Scan({{.Ret.Scan}})
+	{{- if .ShouldCallGroupFunction }}
+	if err != nil {
+		{{- if .EmitResultStructPointers}}
+		return nil, err
+		{{- else}}
+		var zero {{.GroupReturnType}}
+		return zero, err
+		{{- end}}
+	}
+	grouped := {{.GroupFunctionName}}([]{{.Ret.DefineType}}{{"{"}}{{.Ret.ReturnName}}{{"}"}})
+	if len(grouped) == 0 {
+		{{- if .EmitResultStructPointers}}
+		return nil, nil
+		{{- else}}
+		var zero {{.GroupReturnType}}
+		return zero, nil
+		{{- end}}
+	}
+	return grouped[0], nil
+	{{- else}}
 	return {{.Ret.ReturnName}}, err
+	{{- end}}
 }
 {{end}}
 
@@ -45,10 +66,10 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.Ret.De
 {{range .Comments}}//{{.}}
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
-func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ({{.FinalSliceReturnType}}, error) {
 	rows, err := db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- else -}}
-func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalSliceReturnType}}, error) {
 	rows, err := q.db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- end}}
 	if err != nil {
@@ -70,7 +91,11 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ([]{{.Ret.
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	{{- if .ShouldCallGroupFunction }}
+	return {{.GroupFunctionName}}(items), nil
+	{{- else}}
 	return items, nil
+	{{- end}}
 }
 {{end}}
 

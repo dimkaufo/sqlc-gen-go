@@ -22,20 +22,41 @@ type {{.Ret.Type}} struct { {{- range .Ret.Struct.Fields}}
 {{if eq .Cmd ":one"}}
 {{range .Comments}}//{{.}}
 {{end -}}
-func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}) ({{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
     {{- template "queryCodeStdExec" . }}
 	{{- if or (ne .Arg.Pair .Ret.Pair) (ne .Arg.DefineType .Ret.DefineType) }}
 	var {{.Ret.Name}} {{.Ret.Type}}
 	{{- end}}
 	err := row.Scan({{.Ret.Scan}})
+	{{- if .ShouldCallGroupFunction }}
+	if err != nil {
+		{{- if .EmitResultStructPointers}}
+		return nil, err
+		{{- else}}
+		var zero {{.GroupReturnType}}
+		return zero, err
+		{{- end}}
+	}
+	grouped := {{.GroupFunctionName}}([]{{.Ret.DefineType}}{{"{"}}{{.Ret.ReturnName}}{{"}"}})
+	if len(grouped) == 0 {
+		{{- if .EmitResultStructPointers}}
+		return nil, nil
+		{{- else}}
+		var zero {{.GroupReturnType}}
+		return zero, nil
+		{{- end}}
+	}
+	return grouped[0], nil
+	{{- else}}
 	return {{.Ret.ReturnName}}, err
+	{{- end}}
 }
 {{end}}
 
 {{if eq .Cmd ":many"}}
 {{range .Comments}}//{{.}}
 {{end -}}
-func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}) ({{.FinalSliceReturnType}}, error) {
     {{- template "queryCodeStdExec" . }}
     if err != nil {
         return nil, err
@@ -59,7 +80,11 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}
     if err := rows.Err(); err != nil {
         return nil, err
     }
+    {{- if .ShouldCallGroupFunction }}
+    return {{.GroupFunctionName}}(items), nil
+    {{- else}}
     return items, nil
+    {{- end}}
 }
 {{end}}
 

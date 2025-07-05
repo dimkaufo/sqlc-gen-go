@@ -9,44 +9,64 @@ import (
 	"github.com/sqlc-dev/plugin-sdk-go/plugin"
 )
 
+// NestedConfig represents the configuration for nested grouping
+type NestedConfig struct {
+	Field     string         `json:"field"`             // Field to group by
+	StructIn  string         `json:"struct_in"`         // Input struct name
+	StructOut string         `json:"struct_out"`        // Output struct name for grouping
+	Slice     *bool          `json:"slice,omitempty"`   // Whether to use slice (default: true)
+	Pointer   *bool          `json:"pointer,omitempty"` // Whether to use pointers (default: true)
+	Group     []NestedConfig `json:"group,omitempty"`
+	Nested    []NestedConfig `json:"nested,omitempty"` // Nested structures within this one
+}
+
+// NestedQueryConfig represents nested grouping configuration for a specific query
+type NestedQueryConfig struct {
+	Query      string         `json:"query"`       // Query name to group
+	Field      string         `json:"field"`       // Root field to group by
+	StructRoot string         `json:"struct_root"` // Root struct name
+	Group      []NestedConfig `json:"group"`       // Nested group configuration
+}
+
 type Options struct {
-	EmitInterface               bool              `json:"emit_interface" yaml:"emit_interface"`
-	EmitJsonTags                bool              `json:"emit_json_tags" yaml:"emit_json_tags"`
-	JsonTagsIdUppercase         bool              `json:"json_tags_id_uppercase" yaml:"json_tags_id_uppercase"`
-	EmitDbTags                  bool              `json:"emit_db_tags" yaml:"emit_db_tags"`
-	EmitPreparedQueries         bool              `json:"emit_prepared_queries" yaml:"emit_prepared_queries"`
-	EmitExactTableNames         bool              `json:"emit_exact_table_names,omitempty" yaml:"emit_exact_table_names"`
-	EmitEmptySlices             bool              `json:"emit_empty_slices,omitempty" yaml:"emit_empty_slices"`
-	EmitExportedQueries         bool              `json:"emit_exported_queries" yaml:"emit_exported_queries"`
-	EmitResultStructPointers    bool              `json:"emit_result_struct_pointers" yaml:"emit_result_struct_pointers"`
-	EmitParamsStructPointers    bool              `json:"emit_params_struct_pointers" yaml:"emit_params_struct_pointers"`
-	EmitMethodsWithDbArgument   bool              `json:"emit_methods_with_db_argument,omitempty" yaml:"emit_methods_with_db_argument"`
-	EmitPointersForNullTypes    bool              `json:"emit_pointers_for_null_types" yaml:"emit_pointers_for_null_types"`
-	EmitEnumValidMethod         bool              `json:"emit_enum_valid_method,omitempty" yaml:"emit_enum_valid_method"`
-	EmitAllEnumValues           bool              `json:"emit_all_enum_values,omitempty" yaml:"emit_all_enum_values"`
-	EmitSqlAsComment            bool              `json:"emit_sql_as_comment,omitempty" yaml:"emit_sql_as_comment"`
-	JsonTagsCaseStyle           string            `json:"json_tags_case_style,omitempty" yaml:"json_tags_case_style"`
-	Package                     string            `json:"package" yaml:"package"`
-	Out                         string            `json:"out" yaml:"out"`
-	Overrides                   []Override        `json:"overrides,omitempty" yaml:"overrides"`
-	Rename                      map[string]string `json:"rename,omitempty" yaml:"rename"`
-	SqlPackage                  string            `json:"sql_package" yaml:"sql_package"`
-	SqlDriver                   string            `json:"sql_driver" yaml:"sql_driver"`
-	OutputBatchFileName         string            `json:"output_batch_file_name,omitempty" yaml:"output_batch_file_name"`
-	OutputDbFileName            string            `json:"output_db_file_name,omitempty" yaml:"output_db_file_name"`
-	OutputModelsFileName        string            `json:"output_models_file_name,omitempty" yaml:"output_models_file_name"`
-	OutputModelsPackage         string            `json:"output_models_package,omitempty" yaml:"output_models_package"`
-	ModelsPackageImportPath     string            `json:"models_package_import_path,omitempty" yaml:"models_package_import_path"`
-	OutputQuerierFileName       string            `json:"output_querier_file_name,omitempty" yaml:"output_querier_file_name"`
-	OutputCopyfromFileName      string            `json:"output_copyfrom_file_name,omitempty" yaml:"output_copyfrom_file_name"`
-	OutputQueryFilesDirectory   string            `json:"output_query_files_directory,omitempty" yaml:"output_query_files_directory"`
-	OutputFilesSuffix           string            `json:"output_files_suffix,omitempty" yaml:"output_files_suffix"`
-	InflectionExcludeTableNames []string          `json:"inflection_exclude_table_names,omitempty" yaml:"inflection_exclude_table_names"`
-	QueryParameterLimit         *int32            `json:"query_parameter_limit,omitempty" yaml:"query_parameter_limit"`
-	OmitSqlcVersion             bool              `json:"omit_sqlc_version,omitempty" yaml:"omit_sqlc_version"`
-	OmitUnusedStructs           bool              `json:"omit_unused_structs,omitempty" yaml:"omit_unused_structs"`
-	BuildTags                   string            `json:"build_tags,omitempty" yaml:"build_tags"`
-	Initialisms                 *[]string         `json:"initialisms,omitempty" yaml:"initialisms"`
+	EmitInterface               bool                `json:"emit_interface" yaml:"emit_interface"`
+	EmitJsonTags                bool                `json:"emit_json_tags" yaml:"emit_json_tags"`
+	JsonTagsIdUppercase         bool                `json:"json_tags_id_uppercase" yaml:"json_tags_id_uppercase"`
+	EmitDbTags                  bool                `json:"emit_db_tags" yaml:"emit_db_tags"`
+	EmitPreparedQueries         bool                `json:"emit_prepared_queries" yaml:"emit_prepared_queries"`
+	EmitExactTableNames         bool                `json:"emit_exact_table_names,omitempty" yaml:"emit_exact_table_names"`
+	EmitEmptySlices             bool                `json:"emit_empty_slices,omitempty" yaml:"emit_empty_slices"`
+	EmitExportedQueries         bool                `json:"emit_exported_queries" yaml:"emit_exported_queries"`
+	EmitResultStructPointers    bool                `json:"emit_result_struct_pointers" yaml:"emit_result_struct_pointers"`
+	EmitParamsStructPointers    bool                `json:"emit_params_struct_pointers" yaml:"emit_params_struct_pointers"`
+	EmitMethodsWithDbArgument   bool                `json:"emit_methods_with_db_argument,omitempty" yaml:"emit_methods_with_db_argument"`
+	EmitPointersForNullTypes    bool                `json:"emit_pointers_for_null_types" yaml:"emit_pointers_for_null_types"`
+	EmitEnumValidMethod         bool                `json:"emit_enum_valid_method,omitempty" yaml:"emit_enum_valid_method"`
+	EmitAllEnumValues           bool                `json:"emit_all_enum_values,omitempty" yaml:"emit_all_enum_values"`
+	EmitSqlAsComment            bool                `json:"emit_sql_as_comment,omitempty" yaml:"emit_sql_as_comment"`
+	JsonTagsCaseStyle           string              `json:"json_tags_case_style,omitempty" yaml:"json_tags_case_style"`
+	Package                     string              `json:"package" yaml:"package"`
+	Out                         string              `json:"out" yaml:"out"`
+	Overrides                   []Override          `json:"overrides,omitempty" yaml:"overrides"`
+	Rename                      map[string]string   `json:"rename,omitempty" yaml:"rename"`
+	SqlPackage                  string              `json:"sql_package" yaml:"sql_package"`
+	SqlDriver                   string              `json:"sql_driver" yaml:"sql_driver"`
+	OutputBatchFileName         string              `json:"output_batch_file_name,omitempty" yaml:"output_batch_file_name"`
+	OutputDbFileName            string              `json:"output_db_file_name,omitempty" yaml:"output_db_file_name"`
+	OutputModelsFileName        string              `json:"output_models_file_name,omitempty" yaml:"output_models_file_name"`
+	OutputModelsPackage         string              `json:"output_models_package,omitempty" yaml:"output_models_package"`
+	ModelsPackageImportPath     string              `json:"models_package_import_path,omitempty" yaml:"models_package_import_path"`
+	OutputQuerierFileName       string              `json:"output_querier_file_name,omitempty" yaml:"output_querier_file_name"`
+	OutputCopyfromFileName      string              `json:"output_copyfrom_file_name,omitempty" yaml:"output_copyfrom_file_name"`
+	OutputQueryFilesDirectory   string              `json:"output_query_files_directory,omitempty" yaml:"output_query_files_directory"`
+	OutputFilesSuffix           string              `json:"output_files_suffix,omitempty" yaml:"output_files_suffix"`
+	InflectionExcludeTableNames []string            `json:"inflection_exclude_table_names,omitempty" yaml:"inflection_exclude_table_names"`
+	QueryParameterLimit         *int32              `json:"query_parameter_limit,omitempty" yaml:"query_parameter_limit"`
+	OmitSqlcVersion             bool                `json:"omit_sqlc_version,omitempty" yaml:"omit_sqlc_version"`
+	OmitUnusedStructs           bool                `json:"omit_unused_structs,omitempty" yaml:"omit_unused_structs"`
+	BuildTags                   string              `json:"build_tags,omitempty" yaml:"build_tags"`
+	Initialisms                 *[]string           `json:"initialisms,omitempty" yaml:"initialisms"`
+	Nested                      []NestedQueryConfig `json:"nested,omitempty" yaml:"nested"`
 
 	InitialismsMap map[string]struct{} `json:"-" yaml:"-"`
 }

@@ -1,0 +1,47 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "./queries"
+    schema: "schema.sql"
+    codegen:
+      # Plugin configuration for sqlc-gen-go
+      - plugin: "sqlc-gen-go"
+        out: "../sqlcout"
+        options:
+          package: "query"
+          sql_package: "pgx/v5"
+          output_query_files_directory: "query"
+          output_db_file_name: "query/queries.gen.go"
+          output_files_suffix: ".gen"
+          output_models_file_name: "entity/model.gen.go"
+          output_models_package: "entity"
+          models_package_import_path: "github.com/sqlc-dev/sqlc-gen-go/example/sqlcout/entity"
+          emit_result_struct_pointers: true
+          emit_params_struct_pointers: true
+          nested:
+            - query: "GetAuthors"
+              struct_root: "GetAuthorsGroup"
+              group:
+                - struct_in: "Book"
+                  struct_out: "GetAuthorsBook"
+                  nested:
+                    - struct_in: "Review"
+                      struct_out: "GetAuthorsBookReview"
+                - struct_in: "Label"
+                  struct_out: "GetAuthorsLabel"
+            - query: "GetAuthor"
+              struct_root: "GetAuthorGroup"
+              group:
+                - struct_in: "Book"
+                  struct_out: "GetAuthorBook"
+                  nested:
+                    - struct_in: "Review"
+                      struct_out: "GetAuthorBookReview"
+                - struct_in: "Label"
+                  struct_out: "GetAuthorLabel"
+plugins:
+  - name: sqlc-gen-go
+    process:
+      cmd: "/Users/dvashchil/code/fork/sqlc-gen-go/bin/sqlc-gen-go"
+    # wasm:
+    #   url: file:///Users/dvashchil/code/fork/sqlc-gen-go/bin/sqlc-gen-go.wasm
