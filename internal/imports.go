@@ -101,6 +101,10 @@ func (i *importer) Imports(filename string) [][]ImportSpec {
 	if i.Options.OutputBatchFileName != "" {
 		batchFileName = i.Options.OutputBatchFileName
 	}
+	nestedUtilsFileName := "nested.utils.go"
+	if i.Options.OutputNestedUtilsFileName != "" {
+		nestedUtilsFileName = i.Options.OutputNestedUtilsFileName
+	}
 
 	switch filename {
 	case dbFileName:
@@ -113,9 +117,15 @@ func (i *importer) Imports(filename string) [][]ImportSpec {
 		return mergeImports(i.copyfromImports())
 	case batchFileName:
 		return mergeImports(i.batchImports())
-	default:
-		return mergeImports(i.queryImports(filename))
+	case nestedUtilsFileName:
+		return mergeImports(i.nestedUtilsImports())
 	}
+
+	if isNestedFileName(filename) {
+		return mergeImports(i.nestedCoreImports(filename))
+	}
+
+	return mergeImports(i.queryImports(filename))
 }
 
 func (i *importer) dbImports() fileImports {
@@ -280,6 +290,7 @@ func buildImports(options *opts.Options, queries []Query, outputFile OutputFile,
 		}
 		return false
 	}
+
 	if requiresModelsPackageImport() {
 		pkg[ImportSpec{Path: options.ModelsPackageImportPath}] = struct{}{}
 	}
@@ -529,6 +540,27 @@ func (i *importer) batchImports() fileImports {
 	}
 
 	return sortedImports(std, pkg)
+}
+
+func (i *importer) nestedCoreImports(filename string) fileImports {
+	var gq []Query
+	for _, query := range i.Queries {
+		if query.SourceName == extractSqlFileNameFromNestedFileName(filename) {
+			gq = append(gq, query)
+		}
+	}
+
+	std, pkg := buildImports(i.Options, gq, OutputFileModel, i.usesType)
+
+	return sortedImports(std, pkg)
+}
+
+func (i *importer) nestedUtilsImports() fileImports {
+	var pkg []ImportSpec
+	return fileImports{
+		Std: []ImportSpec{{Path: "github.com/sqlc-dev/pqtype"}},
+		Dep: pkg,
+	}
 }
 
 func trimSliceAndPointerPrefix(v string) string {

@@ -18,22 +18,23 @@ SELECT
     r.id, r.book_id, r.rating, r.comment, r.reviewer_name, r.created_at,
     l.id, l.title, l.author_id, l.created_at
 FROM books b
+LEFT JOIN authors a ON a.id = b.author_id
 LEFT JOIN labels l ON l.author_id = a.id
 LEFT JOIN reviews r ON r.book_id = b.id
 ORDER BY b.title, r.created_at
 `
 
 type GetBooksRow struct {
-	ID          pgtype.UUID
+	Id          pgtype.UUID
 	Title       string
-	AuthorID    pgtype.UUID
+	AuthorId    pgtype.UUID
 	PublishedAt pgtype.Date
 	CreatedAt   pgtype.Timestamptz
 	Review      entity.Review
 	Label       entity.Label
 }
 
-func (q *Queries) GetBooks(ctx context.Context) ([]*GetBooksRow, error) {
+func (q *Queries) GetBooks(ctx context.Context) ([]*GetBooksGroup, error) {
 	rows, err := q.db.Query(ctx, getBooks)
 	if err != nil {
 		return nil, err
@@ -43,20 +44,20 @@ func (q *Queries) GetBooks(ctx context.Context) ([]*GetBooksRow, error) {
 	for rows.Next() {
 		var i GetBooksRow
 		if err := rows.Scan(
-			&i.ID,
+			&i.Id,
 			&i.Title,
-			&i.AuthorID,
+			&i.AuthorId,
 			&i.PublishedAt,
 			&i.CreatedAt,
-			&i.Review.ID,
-			&i.Review.BookID,
+			&i.Review.Id,
+			&i.Review.BookId,
 			&i.Review.Rating,
 			&i.Review.Comment,
 			&i.Review.ReviewerName,
 			&i.Review.CreatedAt,
-			&i.Label.ID,
+			&i.Label.Id,
 			&i.Label.Title,
-			&i.Label.AuthorID,
+			&i.Label.AuthorId,
 			&i.Label.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -66,5 +67,5 @@ func (q *Queries) GetBooks(ctx context.Context) ([]*GetBooksRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return items, nil
+	return GroupGetBooks(items), nil
 }

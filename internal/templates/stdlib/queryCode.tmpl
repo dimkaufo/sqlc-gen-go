@@ -1,4 +1,6 @@
 {{define "queryCodeStd"}}
+{{$modelsPackage := .OutputModelsPackage}}
+
 {{range .GoQueries}}
 {{if $.OutputQuery .SourceName}}
 const {{.ConstantName}} = {{$.Q}}-- name: {{.MethodName}} {{.Cmd}}
@@ -17,6 +19,7 @@ type {{.Ret.Type}} struct { {{- range .Ret.Struct.Fields}}
   {{.Name}} {{.Type}} {{if .Tag}}{{$.Q}}{{.Tag}}{{$.Q}}{{end}}
   {{- end}}
 }
+{{ template "nestedRowEntityFieldGetter" (list . $modelsPackage) }}
 {{end}}
 
 {{if eq .Cmd ":one"}}

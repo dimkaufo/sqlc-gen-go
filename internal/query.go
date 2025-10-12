@@ -272,6 +272,8 @@ type Query struct {
 	GroupFunctionName        string // Name of the group function to call (e.g., "GroupGetAuthors")
 	GroupReturnType          string // Return type of the group function (e.g., "GetAuthorsGroup")
 	EmitResultStructPointers bool   // Whether to emit pointer types for result structs
+	IsStructRootReuse        bool   // Whether this query reuses a struct_root from another query
+	OriginalGroupFunction    string // Name of the original group function to reuse (e.g., "GroupGetHireeByID")
 }
 
 func (q Query) hasRetType() bool {

@@ -30,7 +30,7 @@ LIMIT 1
 `
 
 type GetAuthorRow struct {
-	ID     pgtype.UUID
+	Id     pgtype.UUID
 	Name   string
 	Age    int32
 	Book   entity.Book
@@ -42,23 +42,23 @@ func (q *Queries) GetAuthor(ctx context.Context, id pgtype.UUID) (*GetAuthorGrou
 	row := q.db.QueryRow(ctx, getAuthor, id)
 	var i GetAuthorRow
 	err := row.Scan(
-		&i.ID,
+		&i.Id,
 		&i.Name,
 		&i.Age,
-		&i.Book.ID,
+		&i.Book.Id,
 		&i.Book.Title,
-		&i.Book.AuthorID,
+		&i.Book.AuthorId,
 		&i.Book.PublishedAt,
 		&i.Book.CreatedAt,
-		&i.Review.ID,
-		&i.Review.BookID,
+		&i.Review.Id,
+		&i.Review.BookId,
 		&i.Review.Rating,
 		&i.Review.Comment,
 		&i.Review.ReviewerName,
 		&i.Review.CreatedAt,
-		&i.Label.ID,
+		&i.Label.Id,
 		&i.Label.Title,
-		&i.Label.AuthorID,
+		&i.Label.AuthorId,
 		&i.Label.CreatedAt,
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ ORDER BY a.name, b.title, r.created_at
 `
 
 type GetAuthorsRow struct {
-	ID     pgtype.UUID
+	Id     pgtype.UUID
 	Name   string
 	Age    int32
 	Book   entity.Book
@@ -105,23 +105,23 @@ func (q *Queries) GetAuthors(ctx context.Context) ([]*GetAuthorsGroup, error) {
 	for rows.Next() {
 		var i GetAuthorsRow
 		if err := rows.Scan(
-			&i.ID,
+			&i.Id,
 			&i.Name,
 			&i.Age,
-			&i.Book.ID,
+			&i.Book.Id,
 			&i.Book.Title,
-			&i.Book.AuthorID,
+			&i.Book.AuthorId,
 			&i.Book.PublishedAt,
 			&i.Book.CreatedAt,
-			&i.Review.ID,
-			&i.Review.BookID,
+			&i.Review.Id,
+			&i.Review.BookId,
 			&i.Review.Rating,
 			&i.Review.Comment,
 			&i.Review.ReviewerName,
 			&i.Review.CreatedAt,
-			&i.Label.ID,
+			&i.Label.Id,
 			&i.Label.Title,
-			&i.Label.AuthorID,
+			&i.Label.AuthorId,
 			&i.Label.CreatedAt,
 		); err != nil {
 			return nil, err

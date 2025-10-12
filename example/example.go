@@ -62,16 +62,16 @@ func main() {
 	for i, author := range groupedAuthors {
 		fmt.Printf("Author %d: %s (ID: %s)\n", i+1, author.Name, formatUUID(author.ID))
 
-		if len(author.Books) == 0 {
+		if len(author.Publications) == 0 {
 			fmt.Println("  No books")
 		} else {
-			for j, book := range author.Books {
+			for j, book := range author.Publications {
 				fmt.Printf("  Book %d: %s (ID: %s)\n", j+1, book.Title, formatUUID(book.ID))
 
-				if len(book.Reviews) == 0 {
+				if len(book.BookReviews) == 0 {
 					fmt.Println("    No reviews")
 				} else {
-					for k, review := range book.Reviews {
+					for k, review := range book.BookReviews {
 						reviewerName := "Anonymous"
 						if review.ReviewerName.Valid {
 							reviewerName = review.ReviewerName.String
@@ -84,9 +84,9 @@ func main() {
 		}
 
 		// Display labels if any
-		if len(author.Labels) > 0 {
+		if len(author.AuthorLabels) > 0 {
 			fmt.Println("  Labels:")
-			for j, label := range author.Labels {
+			for j, label := range author.AuthorLabels {
 				fmt.Printf("    Label %d: %s (ID: %s)\n", j+1, label.Title, formatUUID(label.ID))
 			}
 		}
@@ -102,10 +102,10 @@ func main() {
 	totalReviews := 0
 	totalLabels := 0
 	for _, author := range groupedAuthors {
-		totalBooks += len(author.Books)
-		totalLabels += len(author.Labels)
-		for _, book := range author.Books {
-			totalReviews += len(book.Reviews)
+		totalBooks += len(author.Publications)
+		totalLabels += len(author.AuthorLabels)
+		for _, book := range author.Publications {
+			totalReviews += len(book.BookReviews)
 		}
 	}
 	fmt.Printf("✓ Total books: %d\n", totalBooks)

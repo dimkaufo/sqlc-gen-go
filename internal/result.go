@@ -186,6 +186,21 @@ func argName(name string) string {
 
 func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []Struct) ([]Query, error) {
 	qs := make([]Query, 0, len(req.Queries))
+
+	// Track struct_root usage across all queries to detect reuse opportunities
+	structRootUsage := make(map[string]string) // maps struct_root -> first query that uses it
+	if options.Nested != nil {
+		for _, nestedConfig := range options.Nested.Queries {
+			structRoot := nestedConfig.StructRoot
+			if structRoot == "" {
+				structRoot = nestedConfig.Query + "Group"
+			}
+			if _, exists := structRootUsage[structRoot]; !exists {
+				structRootUsage[structRoot] = nestedConfig.Query
+			}
+		}
+	}
+
 	for _, query := range req.Queries {
 		if query.Name == "" {
 			continue
@@ -317,6 +332,7 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 				}
 				emit = true
 			}
+
 			gq.Ret = QueryValue{
 				Emit:        emit,
 				Name:        "i",
@@ -327,7 +343,7 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 		}
 
 		// Check if this query has nested configuration
-		for _, nestedConfig := range options.Nested {
+		for _, nestedConfig := range options.Nested.Queries {
 			if nestedConfig.Query == gq.MethodName {
 				gq.HasNestedConfig = true
 				gq.GroupFunctionName = "Group" + gq.MethodName
@@ -337,6 +353,12 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 				} else {
 					gq.GroupReturnType = gq.MethodName + "Group"
 				}
+
+				// Check if this struct_root is being reused
+				firstQuery := structRootUsage[gq.GroupReturnType]
+				gq.IsStructRootReuse = (firstQuery != gq.MethodName)
+				gq.OriginalGroupFunction = "Group" + firstQuery
+
 				// Set pointer configuration for result structs
 				gq.EmitResultStructPointers = options.EmitResultStructPointers
 				break

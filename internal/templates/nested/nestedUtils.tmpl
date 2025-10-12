@@ -1,0 +1,14 @@
+{{ define "nestedUtils" }}
+
+// getOrCreateNestedMap is a generic helper function to get or create nested maps
+// T is the value type of the inner map, K is the key type of the inner map
+func getOrCreateNestedMap[T any, K comparable](nestedMaps map[string]map[K]T, mapID string) map[K]T {
+	innerMap := nestedMaps[mapID]
+	if innerMap == nil {
+		innerMap = make(map[K]T)
+		nestedMaps[mapID] = innerMap
+	}
+	return innerMap
+}
+
+{{ end }}

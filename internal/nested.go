@@ -2,77 +2,117 @@ package golang
 
 import (
 	"fmt"
-	"slices"
 	"strings"
-	"text/template"
 
-	"github.com/gobuffalo/flect"
-	"github.com/iancoleman/strcase"
-
+	"github.com/sqlc-dev/sqlc-gen-go/internal/debug"
 	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 )
 
-// NestedFieldConfig represents field mapping configuration (auto-generated from SQLC structs)
-type NestedFieldConfig struct {
-	Name     string `json:"name"`      // Go struct field name
-	RowField string `json:"row_field"` // SQL row field name
-	Type     string `json:"type"`      // Go type
-	JsonTag  string `json:"json_tag"`  // JSON tag name
-}
+// NestedQueryTemplateData represents the data passed to the nested template
+type NestedQueryTemplateData struct {
+	FunctionName   string
+	Query          *Query
+	RootStructName string            // Sometimes we only need name of the root struct, not the data
+	RootStructData *NestedStructData // Nested structures in the root struct
+	EmitPointers   bool              // Whether to emit pointer types for row parameters
+	EmitJSONTags   bool              // Whether to emit JSON tags
 
-// NestedTemplateData represents the data passed to the nested template
-type NestedTemplateData struct {
-	Package         string
-	ImportPath      string
-	FunctionName    string
-	QueryName       string
-	RootStruct      string
-	KeyType         string
-	GroupField      string
-	EmitJSONTags    bool
-	EmitPointers    bool // Whether to emit pointer types for row parameters
-	NestedStructs   []NestedStructData
-	GenerateStructs []NestedStructDefinition
-	NestedFields    []string
-	Structs         []Struct
+	// Used only in wrapper function template
+	CastToQueryName string // Check if we already have query to reuse
 }
 
 // NestedStructData represents data for a nested structure in the template
 type NestedStructData struct {
-	StructIn  string              // Input struct name from SQLC
-	StructOut string              // Output struct name for grouping
-	Field     string              // Field to group by
-	IsSlice   bool                // Whether this is a slice/array field
-	IsPointer bool                // Whether to use pointers
-	FieldName string              // Field name in parent struct (e.g., "Books" or "Book")
-	Fields    []NestedFieldConfig // Auto-extracted field mappings
-	Nested    []NestedStructData  // Nested structures within this one
+	StructIn                string                    // Input struct name from SQLC
+	StructOut               string                    // Output struct name for grouping
+	FieldGroupBy            string                    // Field to group by
+	FieldName               string                    // Field name in parent struct (e.g., "Books" or "Book")
+	FieldType               string                    // Field type in parent struct (e.g., "[]*BookGroup", "[]BookGroup", "*BookGroup", or "BookGroup")
+	RowFieldName            string                    // Field name in row struct (e.g., "Book")
+	RowFieldType            string                    // Field type in row struct (e.g., "BookGroup")
+	IsRowFieldExistsInQuery bool                      // Whether the corresponding row field to the StructIn exists in the query return struct
+	FieldTags               map[string]string         // Field tag in parent struct (e.g., "json:books" or "json:book")
+	KeyType                 string                    // Key type for the map
+	IsSlice                 bool                      // Whether this is a slice/array field
+	IsPointer               bool                      // Whether to use pointers
+	IsComposite             bool                      // Whether this is a composite struct that was already generated
+	IsEntityStruct          bool                      // Whether this is an entity struct that should be reused
+	IsRoot                  bool                      // Whether this is the root of the nested structs
+	Match                   []*opts.NestedMatchConfig // Match configuration
+
+	// Map indicating if this struct's StructOut appears multiple times at each tree level.
+	// Key is the level (1 = immediate parent, 2 = grandparent, etc.)
+	// Value is true if StructOut appears multiple times at that level.
+	// Used for map naming when the same composite struct appears at different levels.
+	// For example: RecruitersCompanyComposite at level 1 (direct child) and level 2 (grandchild).
+	DuplicatedRelativeToParents map[int]bool
+
+	Fields        []Field             // Non-nested fields
+	NestedStructs []*NestedStructData // Nested structures data of the current struct
+
+	// Skip struct generation if it's a composite struct
+	// that was already generated or will be generated in another *_nested.sql file
+	SkipStructGeneration bool
+
+	// Should generate entity to composite function to populate composite from entity
+	ShouldGenerateEntityToCompositeFunction bool
 }
 
-// NestedStructDefinition represents struct definition data for the template
-type NestedStructDefinition struct {
-	Name         string              // Struct name
-	Fields       []NestedFieldConfig // Struct fields (auto-extracted)
-	NestedArrays []NestedArrayField  // Arrays of nested structs
+type NestedQueryTemplateDataBuilder struct {
+	options *opts.Options
+	queries []Query
+	structs []Struct
+	nested  []Nested
 }
 
-// NestedArrayField represents a field pointing to a nested struct (array or single)
-type NestedArrayField struct {
-	Name      string // Field name (e.g., "Books" or "Book")
-	Type      string // Field type (e.g., "[]*BookGroup", "[]BookGroup", "*BookGroup", or "BookGroup")
-	JsonTag   string // JSON tag name (e.g., "books" or "book")
-	IsSlice   bool   // Whether this is a slice/array field
-	IsPointer bool   // Whether to use pointers
+func populateNestedDataItems(
+	options *opts.Options,
+	queries []Query,
+	structs []Struct,
+	nested []Nested,
+) ([]Nested, error) {
+	// Build composite struct registry
+	compositesBuilder := NestedCompositesDataBuilder{
+		options: options,
+		queries: queries,
+		structs: structs,
+	}
+	err := compositesBuilder.buildCompositeStructRegistry()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build data items and populate nested data items
+	templateDataBuilder := NestedQueryTemplateDataBuilder{
+		options: options,
+		queries: queries,
+		structs: structs,
+		nested:  nested,
+	}
+	for i := range nested {
+		nestedDataItem, err := templateDataBuilder.buildNestedDataItems(nested[i].Configs)
+		if err != nil {
+			return nil, err
+		}
+
+		nested[i].NestedDataItems = nestedDataItem
+	}
+
+	return nested, nil
 }
 
-// generateNestedGroupingFunctionsForSource generates nested grouping functions for a specific source file
-func generateNestedGroupingFunctionsForSource(options *opts.Options, queries []Query, structs []Struct, configs []opts.NestedQueryConfig) ([]string, error) {
-	var functions []string
+func (b *NestedQueryTemplateDataBuilder) buildNestedDataItems(
+	queryConfigs []*opts.NestedQueryConfig,
+) ([]NestedQueryTemplateData, error) {
+	var nestedDataItems []NestedQueryTemplateData
 
-	for _, config := range configs {
+	// Track which struct_root has been generated to avoid duplicates
+	generatedStructRoots := make(map[string]string) // struct_root -> first query that generated it
+
+	for _, config := range queryConfigs {
 		// Find the corresponding query
 		var targetQuery *Query
-		for _, q := range queries {
+		for _, q := range b.queries {
 			if q.MethodName == config.Query || q.SourceName == config.Query {
 				targetQuery = &q
 				break
@@ -80,155 +120,57 @@ func generateNestedGroupingFunctionsForSource(options *opts.Options, queries []Q
 		}
 
 		if targetQuery == nil {
+			debug.Warnf("Query '%s' not found for nested struct", config.Query)
 			continue // Skip if query not found
 		}
 
-		// Generate the function with automatic field extraction
-		function, err := generateNestedFunction(options, *targetQuery, config, structs)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate nested function for query %s: %w", config.Query, err)
+		structRoot := config.StructRoot
+		if structRoot == "" {
+			structRoot = config.Query + "Group"
 		}
 
-		functions = append(functions, function)
+		// Check if this struct_root has already been generated
+		if firstQuery, exists := generatedStructRoots[structRoot]; exists && firstQuery != config.Query {
+			// Generate a wrapper function that reuses the existing Group function
+			nestedDataItem, err := b.buildNestedWrapperData(targetQuery, config, firstQuery)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate wrapper function for query %s: %w", config.Query, err)
+			}
+			nestedDataItems = append(nestedDataItems, nestedDataItem)
+		} else {
+			// Generate the full function with struct definitions (first time)
+			nestedDataItem, err := b.buildNestedData(targetQuery, config)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate nested function for query %s: %w", config.Query, err)
+			}
+			nestedDataItems = append(nestedDataItems, nestedDataItem)
+			generatedStructRoots[structRoot] = config.Query
+		}
 	}
 
-	return functions, nil
+	return nestedDataItems, nil
 }
 
-// generateNestedFunction generates a single nested grouping function
-func generateNestedFunction(options *opts.Options, query Query, config opts.NestedQueryConfig, structs []Struct) (string, error) {
-	// Build template data with automatic field extraction
-	data := buildNestedTemplateData(options, query, config, structs)
-
-	// Load and execute template with custom functions
-	tmpl, err := template.New("nested").Funcs(template.FuncMap{
-		"lower":     strings.ToLower,
-		"camelCase": strcase.ToLowerCamel,
-	}).Parse(nestedTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse nested template: %w", err)
-	}
-
-	var buf strings.Builder
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute nested template: %w", err)
-	}
-
-	return buf.String(), nil
-}
-
-// collectNestedFields recursively collects all nested field names from the config
-func collectNestedFields(config []opts.NestedConfig) []string {
-	var fields []string
-	for _, nested := range config {
-		fields = append(fields, nested.StructIn)
-		// Recursively collect nested fields
-		if len(nested.Nested) > 0 {
-			fields = append(fields, collectNestedFields(nested.Nested)...)
-		}
-	}
-	return fields
-}
-
-// extractFields extracts fields from a struct, excluding nested fields
-func extractFields(structFields []Field, options *opts.Options, nestedFields []string, rowFieldPrefix string) []NestedFieldConfig {
-	var fields []NestedFieldConfig
-
-	// Convert SQLC fields to nested field configs, excluding configured nested fields
-	for _, field := range structFields {
-		// Skip fields that are configured as nested
-		if slices.Contains(nestedFields, field.Name) {
-			continue
-		}
-
-		// For root fields (when prefix is empty), just use the field name
-		// For nested fields, use the prefix.field format
-		rowField := field.Name
-		if rowFieldPrefix != "" {
-			rowField = fmt.Sprintf("%s.%s", rowFieldPrefix, field.Name)
-		}
-
-		nestedField := NestedFieldConfig{
-			Name:     field.Name,
-			RowField: rowField,
-			Type:     field.Type,
-			JsonTag:  extractJsonTag(field, options),
-		}
-		fields = append(fields, nestedField)
-	}
-
-	return fields
-}
-
-// buildNestedStructData recursively builds nested struct data
-func buildNestedStructData(queryName string, config opts.NestedConfig, structs []Struct, options *opts.Options) NestedStructData {
-	structOut := config.StructOut
-	if structOut == "" {
-		structOut = fmt.Sprintf("%s%sGroup", queryName, config.StructIn)
-	}
-
-	// Default field to "ID" if not specified
-	field := config.Field
-	if field == "" {
-		field = "ID"
-	}
-
-	// Default slice to true if not specified
-	isSlice := true
-	if config.Slice != nil {
-		isSlice = *config.Slice
-	}
-
-	// Default pointer to true if not specified
-	isPointer := true
-	if config.Pointer != nil {
-		isPointer = *config.Pointer
-	}
-
-	// Generate field name based on slice setting using proper pluralization
-	var fieldName string
-	if isSlice {
-		fieldName = pluralizeWithCase(config.StructIn)
-	} else {
-		fieldName = singularizeWithCase(config.StructIn)
-	}
-
-	// Collect nested fields recursively
-	nestedFields := collectNestedFields(config.Nested)
-
-	// Find the struct fields for the given StructIn
-	var structFields []Field
-	for _, s := range structs {
-		if s.Name == config.StructIn {
-			structFields = s.Fields
-			break
-		}
-	}
-
-	// Automatically extract fields from SQLC struct
-	fields := extractFields(structFields, options, nestedFields, config.StructIn)
-
-	// Build nested structures recursively
-	var nestedStructs []NestedStructData
-	for _, nested := range config.Nested {
-		nestedData := buildNestedStructData(queryName, nested, structs, options)
-		nestedStructs = append(nestedStructs, nestedData)
-	}
-
-	return NestedStructData{
-		StructIn:  config.StructIn,
-		StructOut: structOut,
-		Field:     field,
-		IsSlice:   isSlice,
-		IsPointer: isPointer,
-		FieldName: fieldName,
-		Fields:    fields,
-		Nested:    nestedStructs,
-	}
+// buildNestedWrapperData builds template data for the wrapper function
+func (b *NestedQueryTemplateDataBuilder) buildNestedWrapperData(
+	query *Query,
+	config *opts.NestedQueryConfig,
+	firstQueryName string,
+) (NestedQueryTemplateData, error) {
+	return NestedQueryTemplateData{
+		FunctionName:    fmt.Sprintf("Group%s", query.MethodName), // Use the original function name
+		Query:           query,
+		RootStructName:  config.StructRoot,
+		EmitJSONTags:    b.options.EmitJsonTags,
+		EmitPointers:    b.options.EmitResultStructPointers,
+		CastToQueryName: firstQueryName,
+	}, nil
 }
 
 // buildNestedTemplateData builds the template data for nested function generation
-func buildNestedTemplateData(options *opts.Options, query Query, config opts.NestedQueryConfig, structs []Struct) NestedTemplateData {
+// with control over whether composite struct definitions should be included
+func (b *NestedQueryTemplateDataBuilder) buildNestedData(query *Query, config *opts.NestedQueryConfig) (NestedQueryTemplateData, error) {
+	// Generate query name
 	queryName := query.MethodName
 	if queryName == "" {
 		queryName = query.SourceName
@@ -240,195 +182,365 @@ func buildNestedTemplateData(options *opts.Options, query Query, config opts.Nes
 		rootStruct = fmt.Sprintf("%sGroup", queryName)
 	}
 
+	// Generate group function name
 	functionName := fmt.Sprintf("Group%s", queryName)
 
 	// Default root field to "ID" if not specified
-	rootField := config.Field
+	rootField := config.FieldGroupBy
 	if rootField == "" {
 		rootField = "ID"
 	}
 
-	// Build nested structs data with automatic field extraction and multi-level nesting
-	var nestedStructs []NestedStructData
-	for _, nested := range config.Group {
-		structData := buildNestedStructData(queryName, nested, structs, options)
-		nestedStructs = append(nestedStructs, structData)
-	}
-
-	// Collect all nested field names recursively from the config
-	nestedFields := collectNestedFields(config.Group)
-
-	// Add root struct definition - extract only non-nested fields from root struct
+	// Add root struct definition - extract only non-nested and non-composite fields from root struct
 	// Use the query's Row struct fields directly
-	var rootRowFields []Field
+	var structFields []Field
 	if query.Ret.Struct != nil {
-		rootRowFields = query.Ret.Struct.Fields
-	}
-	rootFields := extractFields(rootRowFields, options, nestedFields, "")
-	rootArrays := buildNestedArrayFields(config.Group)
-
-	// Build struct definitions with automatic field extraction
-	var generateStructs []NestedStructDefinition
-	generateStructs = append(generateStructs, NestedStructDefinition{
-		Name:         rootStruct,
-		Fields:       rootFields,
-		NestedArrays: rootArrays,
-	})
-
-	// Add nested struct definitions recursively
-	generateStructs = append(generateStructs, buildAllNestedStructDefinitions(nestedStructs, structs, options)...)
-
-	// Get models package import path and name
-	modelsPackageImport := options.ModelsPackageImportPath
-	modelsPackageName := ""
-	if modelsPackageImport != "" {
-		parts := strings.Split(modelsPackageImport, "/")
-		modelsPackageName = parts[len(parts)-1]
+		structFields = query.Ret.Struct.Fields
 	}
 
-	// Check if any struct uses types from models package
-	needsModelsPackage := false
-	if modelsPackageName != "" {
-		for _, s := range structs {
-			for _, f := range s.Fields {
-				if strings.HasPrefix(f.Type, modelsPackageName+".") {
-					needsModelsPackage = true
-					break
+	nestedStructData, err := b.buildNestedStructData(
+		query.MethodName,
+		&opts.NestedGroupConfig{
+			Group:        config.Group,
+			FieldGroupBy: rootField,
+			StructIn:     rootStruct,
+			StructOut:    rootStruct,
+			IsComposite:  config.IsComposite,
+		},
+		nil,
+		structFields,
+	)
+	if err != nil {
+		return NestedQueryTemplateData{}, err
+	}
+
+	// // Validate interface compatibility for nested composites
+	// if err := validateNestedInterfaceCompatibility(nestedStructData, rootStruct); err != nil {
+	// 	return NestedQueryTemplateData{}, fmt.Errorf("validation failed for query %s: %w", queryName, err)
+	// }
+
+	return NestedQueryTemplateData{
+		FunctionName:   functionName,
+		Query:          query,
+		RootStructName: config.StructRoot,
+		RootStructData: nestedStructData,
+		EmitJSONTags:   b.options.EmitJsonTags,
+		EmitPointers:   b.options.EmitResultStructPointers,
+	}, nil
+}
+
+// buildNestedStructData builds the data structure for a nested query configuration
+func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
+	queryName string,
+	config *opts.NestedGroupConfig,
+	parent *NestedStructData,
+	structFields []Field,
+) (*NestedStructData, error) {
+	query := b.getQueryByName(queryName)
+	if query == nil {
+		return nil, fmt.Errorf("query %s not found", queryName)
+	}
+	// Automatically extract fields from SQLC struct, excluding nested
+	fields := b.getNonNestedStructFields(structFields, []*opts.NestedGroupConfig{config})
+
+	// Get config of composite if we have reference to composite
+	nestedConfigs := config.Group
+	structIn := config.StructIn
+	if config.GetIsComposite() {
+		nestedConfigs = compositeStructRegistry[config.StructOut].Config.Group
+		structIn = compositeStructRegistry[config.StructOut].Config.StructRootIn
+	}
+
+	// Determine if this struct should reuse an existing entity struct
+	isEntity := b.shouldReuseEntityStruct(config.StructOut, config.StructIn, config)
+
+	// Generate field name based on FieldOut if specified, otherwise use slice setting with proper pluralization
+	fieldName := getFieldNameFromNestedConfig(config)
+
+	// Generate field type
+	fieldType := b.getFieldType(
+		config.StructIn,
+		config.StructOut,
+		config.GetIsSlice(),
+		config.GetIsPointer(),
+		isEntity,
+		config,
+	)
+
+	isRootConfig := parent == nil
+
+	isAlreadyGenerated := b.IsCompositeStructAlreadyGenerated(config)
+	willBeGeneratedInAnotherFile := b.IsCompositeStructWillBeGeneratedInAnotherFile(config)
+	skipStructGeneration := !isRootConfig && (isAlreadyGenerated || willBeGeneratedInAnotherFile || parent.SkipStructGeneration)
+
+	// Mark composite struct as already generated if it's the root of the current query or
+	// parent is not skipped to render non-root compoiste in the same file as parent and it's free
+	// (no one takes it to generate in another file)
+	if isRootConfig || (!willBeGeneratedInAnotherFile && compositeStructRegistry[config.StructOut] != nil && !parent.SkipStructGeneration) {
+		compositeStructRegistry[config.StructOut].IsStructAlreadyGenerated = true
+	}
+
+	// Create the NestedStructData
+	result := &NestedStructData{
+		StructIn:                structIn,
+		StructOut:               config.StructOut,
+		FieldGroupBy:            config.FieldGroupBy,
+		IsSlice:                 config.GetIsSlice(),
+		IsPointer:               config.GetIsPointer(),
+		KeyType:                 determineKeyType(config.FieldGroupBy),
+		FieldName:               fieldName,
+		FieldType:               fieldType,
+		RowFieldName:            config.StructIn,
+		RowFieldType:            fmt.Sprintf("%s.%s", b.options.OutputModelsPackage, config.StructIn),
+		FieldTags:               map[string]string{"json": JSONTagName(fieldName, b.options)},
+		Fields:                  fields,
+		IsEntityStruct:          isEntity,
+		IsComposite:             config.GetIsComposite(),
+		IsRowFieldExistsInQuery: b.isRowFieldExistsInQuery(queryName, config),
+		SkipStructGeneration:    skipStructGeneration,
+		IsRoot:                  isRootConfig,
+		Match:                   config.Match,
+	}
+
+	// Build nested structures recursively (do it after initialization to properly set SkipStructGeneration for children)
+	// So we set SkipStructGeneration from root to leafs (to avoid cases when we skip struct generation for root, but not for children)
+	nestedStructs, err := b.buildNestedStructsList(queryName, result, nestedConfigs)
+	if err != nil {
+		return nil, err
+	}
+	result.NestedStructs = nestedStructs
+
+	// Validate extracted fields only at the root level, since validation is recursive
+	// and will check all nested structures
+	if isRootConfig {
+		if err := validateExtractedFields(fields, nestedStructs, query, b.structs, config.StructOut); err != nil {
+			return nil, fmt.Errorf("validation failed for query %s: %w", queryName, err)
+		}
+	}
+
+	// Set flags for duplicate structs (by StructOut) at each tree level from each node's perspective
+	// This is used to determine when to add prefixes to map names
+	updateDuplicatesFromNodePerspective(result, []*NestedStructData{})
+
+	return result, nil
+}
+
+func (b *NestedQueryTemplateDataBuilder) getQueryByName(queryName string) *Query {
+	for _, query := range b.queries {
+		if query.MethodName == queryName {
+			return &query
+		}
+	}
+	return nil
+}
+
+// isRowFieldExistsInQuery checks if the row field exists in the query
+func (b *NestedQueryTemplateDataBuilder) isRowFieldExistsInQuery(queryName string, config *opts.NestedGroupConfig) bool {
+	for _, query := range b.queries {
+		if query.MethodName == queryName {
+			for _, field := range query.Ret.Struct.Fields {
+				if field.Name == config.StructIn {
+					return true
 				}
 			}
-			if needsModelsPackage {
+		}
+	}
+	return false
+}
+
+// updateDuplicatesFromNodePerspective recursively traverses the tree and for each node,
+// checks if its StructOut appears multiple times at each ancestor level, looking UP the tree.
+// Level 1 = immediate parent scope, Level 2 = grandparent scope, etc.
+// This is used to determine when to add prefixes to map names.
+func updateDuplicatesFromNodePerspective(current *NestedStructData, ancestors []*NestedStructData) {
+	if current == nil {
+		return
+	}
+
+	// For each nested struct (child), check duplicates from its perspective
+	for _, nestedStruct := range current.NestedStructs {
+		// Initialize the map in place if needed
+		if nestedStruct.DuplicatedRelativeToParents == nil {
+			nestedStruct.DuplicatedRelativeToParents = make(map[int]bool)
+		}
+
+		// Build the path: current node becomes an ancestor for the child
+		childAncestors := append(ancestors, current)
+
+		// Check duplicates at each ancestor level (distance from child going UP)
+		for level := 1; level <= len(childAncestors); level++ {
+			// Get the ancestor at this level (1-indexed: level 1 = immediate parent)
+			ancestorIndex := len(childAncestors) - level
+			ancestorNode := childAncestors[ancestorIndex]
+
+			// Collect all nested structs by StructOut at this ancestor's scope
+			structOutMap := make(map[string][]*NestedStructData)
+			collectAllNestedStructsByStructOut(ancestorNode, structOutMap)
+
+			// Check if this nested struct's StructOut appears multiple times at this level
+			structOutStructs, structOutExists := structOutMap[nestedStruct.StructOut]
+			nestedStruct.DuplicatedRelativeToParents[level] = structOutExists && len(structOutStructs) > 1
+		}
+
+		// Recursively process children of this nested struct
+		updateDuplicatesFromNodePerspective(nestedStruct, childAncestors)
+	}
+}
+
+// collectAllNestedStructsByStructOut collects all nested structs recursively from the given node.
+// This creates a flattened view of all nested structs under the node, keyed by StructOut.
+// Used for detecting duplicates when generating map names (since map names are based on StructOut).
+func collectAllNestedStructsByStructOut(data *NestedStructData, structOutMap map[string][]*NestedStructData) {
+	if data == nil {
+		return
+	}
+
+	for _, nestedStruct := range data.NestedStructs {
+		// Add this nested struct to the map keyed by StructOut
+		structOutMap[nestedStruct.StructOut] = append(structOutMap[nestedStruct.StructOut], nestedStruct)
+
+		// Recursively collect from deeper levels
+		collectAllNestedStructsByStructOut(nestedStruct, structOutMap)
+	}
+}
+
+// IsCompositeStructAlreadyGenerated checks if the composite struct was already generated
+func (b *NestedQueryTemplateDataBuilder) IsCompositeStructAlreadyGenerated(config *opts.NestedGroupConfig) bool {
+	return config.GetIsComposite() && compositeStructRegistry[config.StructOut].IsStructAlreadyGenerated
+}
+
+// IsCompositeStructWillBeGeneratedInAnotherFile checks if the composite struct will be generated in another _nested.sql file
+func (b *NestedQueryTemplateDataBuilder) IsCompositeStructWillBeGeneratedInAnotherFile(config *opts.NestedGroupConfig) bool {
+	// Check if the struct will be generated in another _nested.sql file
+	willBeGeneratedInAnotherFile := false
+	for _, nestedItem := range b.nested {
+		for _, nestedConfig := range nestedItem.Configs {
+			if nestedConfig.StructRoot == config.StructOut && config.GetIsComposite() {
+				willBeGeneratedInAnotherFile = true
 				break
 			}
 		}
+
+		if willBeGeneratedInAnotherFile {
+			break
+		}
 	}
 
-	return NestedTemplateData{
-		Package:         options.Package,
-		FunctionName:    functionName,
-		QueryName:       queryName,
-		RootStruct:      rootStruct,
-		KeyType:         determineKeyType(rootField),
-		GroupField:      rootField,
-		EmitJSONTags:    options.EmitJsonTags,
-		EmitPointers:    options.EmitResultStructPointers,
-		NestedStructs:   nestedStructs,
-		GenerateStructs: generateStructs,
-	}
+	return willBeGeneratedInAnotherFile
 }
 
-// buildAllNestedStructDefinitions recursively builds all nested struct definitions
-func buildAllNestedStructDefinitions(nestedStructs []NestedStructData, structs []Struct, options *opts.Options) []NestedStructDefinition {
-	var definitions []NestedStructDefinition
+// buildNestedStructsList builds a list of nested struct data from a group configuration
+func (b *NestedQueryTemplateDataBuilder) buildNestedStructsList(queryName string, parent *NestedStructData, group []*opts.NestedGroupConfig) ([]*NestedStructData, error) {
+	var nestedStructs []*NestedStructData
 
-	for _, nested := range nestedStructs {
-		// Build nested arrays for this struct
-		var nestedArrays []NestedArrayField
-		for _, childNested := range nested.Nested {
-			var fieldName, jsonTag, fieldType string
-			if childNested.IsSlice {
-				fieldName = pluralizeWithCase(childNested.StructIn) // "Reviews"
-				jsonTag = strings.ToLower(fieldName)                // "reviews"
-				if childNested.IsPointer {
-					fieldType = fmt.Sprintf("[]*%s", childNested.StructOut) // "[]*GetAuthorsBookReview"
-				} else {
-					fieldType = fmt.Sprintf("[]%s", childNested.StructOut) // "[]GetAuthorsBookReview"
-				}
-			} else {
-				fieldName = singularizeWithCase(childNested.StructIn) // "Review"
-				jsonTag = strings.ToLower(fieldName)                  // "review"
-				if childNested.IsPointer {
-					fieldType = fmt.Sprintf("*%s", childNested.StructOut) // "*GetAuthorsBookReview"
-				} else {
-					fieldType = childNested.StructOut // "GetAuthorsBookReview"
-				}
-			}
-
-			nestedArrays = append(nestedArrays, NestedArrayField{
-				Name:      fieldName,
-				Type:      fieldType,
-				JsonTag:   jsonTag,
-				IsSlice:   childNested.IsSlice,
-				IsPointer: childNested.IsPointer,
-			})
-		}
-
-		// Add struct definition
-		definitions = append(definitions, NestedStructDefinition{
-			Name:         nested.StructOut,
-			Fields:       nested.Fields,
-			NestedArrays: nestedArrays,
-		})
-
-		// Recursively add child struct definitions
-		definitions = append(definitions, buildAllNestedStructDefinitions(nested.Nested, structs, options)...)
-	}
-
-	return definitions
-}
-
-// extractJsonTag extracts the JSON tag from a SQLC field
-func extractJsonTag(field Field, options *opts.Options) string {
-	// Check if field already has a JSON tag
-	if jsonTag, exists := field.Tags["json"]; exists {
-		return jsonTag
-	}
-
-	// Generate JSON tag based on field name and options
-	return JSONTagName(field.DBName, options)
-}
-
-// buildNestedArrayFields builds nested field definitions (arrays or single objects)
-func buildNestedArrayFields(nested []opts.NestedConfig) []NestedArrayField {
-	var arrays []NestedArrayField
-
-	for _, n := range nested {
-		structOut := n.StructOut
-		if structOut == "" {
-			structOut = fmt.Sprintf("%sGroup", n.StructIn)
-		}
-
-		// Default slice to true if not specified
-		isSlice := true
-		if n.Slice != nil {
-			isSlice = *n.Slice
-		}
-
-		// Default pointer to true if not specified
-		isPointer := true
-		if n.Pointer != nil {
-			isPointer = *n.Pointer
-		}
-
-		// Generate field name and JSON tag based on slice and pointer settings
-		var fieldName, jsonTag, fieldType string
-		if isSlice {
-			fieldName = pluralizeWithCase(n.StructIn) // "Books" or "Vacancies"
-			jsonTag = strings.ToLower(fieldName)      // "books" or "vacancies"
-			if isPointer {
-				fieldType = fmt.Sprintf("[]*%s", structOut) // "[]*GetAuthorsBook"
-			} else {
-				fieldType = fmt.Sprintf("[]%s", structOut) // "[]GetAuthorsBook"
-			}
-		} else {
-			fieldName = singularizeWithCase(n.StructIn) // "Book" or "Vacancy"
-			jsonTag = strings.ToLower(fieldName)        // "book" or "vacancy"
-			if isPointer {
-				fieldType = fmt.Sprintf("*%s", structOut) // "*GetAuthorsBook"
-			} else {
-				fieldType = structOut // "GetAuthorsBook"
+	for _, nested := range group {
+		// Find the struct fields for the given StructIn
+		var structFields []Field
+		for _, s := range b.structs {
+			if s.Name == nested.StructIn {
+				structFields = s.Fields
+				break
 			}
 		}
 
-		arrays = append(arrays, NestedArrayField{
-			Name:      fieldName,
-			Type:      fieldType,
-			JsonTag:   jsonTag,
-			IsSlice:   isSlice,
-			IsPointer: isPointer,
-		})
+		nestedData, err := b.buildNestedStructData(queryName, nested, parent, structFields)
+		if err != nil {
+			return nil, err
+		}
+		if nestedData != nil {
+			nestedStructs = append(nestedStructs, nestedData)
+		}
 	}
 
-	return arrays
+	return nestedStructs, nil
+}
+
+// extractFields extracts fields from a struct, excluding given fields
+func (b *NestedQueryTemplateDataBuilder) extractFields(
+	allFields []Field,
+	fieldsToExclued []string,
+	rowFieldPrefix string,
+) []Field {
+	var fields []Field
+
+	// Convert SQLC fields to nested field configs, excluding configured nested fields and composite fields
+	for _, field := range allFields {
+		// Skip fields that are configured as nested
+		skipField := false
+		for _, fieldToExclude := range fieldsToExclued {
+			if fieldToExclude == field.Name {
+				skipField = true
+				break
+			}
+		}
+		if skipField {
+			continue
+		}
+
+		// For root fields (when prefix is empty), just use the field name
+		// For nested fields, use the prefix.field format
+		rowField := field.Name
+		if rowFieldPrefix != "" {
+			rowField = strings.Join([]string{rowFieldPrefix, field.Name}, ".")
+		}
+
+		nestedField := Field{
+			Name:   field.Name,
+			DBName: rowField,
+			Type:   field.Type,
+			Tags:   field.Tags,
+		}
+		fields = append(fields, nestedField)
+	}
+
+	return fields
+}
+
+// shouldReuseEntityStruct determines if we should reuse an existing entity struct
+// A struct should be reused if:
+// 1. It exists in the schema structs (generated from SQL)
+// 2. It doesn't have nested configurations (is a leaf node)
+// 3. It's not marked as composite (composite structs reuse previously generated nested structures)
+//
+// Note: This is different from composite structs which reuse previously generated nested structures
+func (b *NestedQueryTemplateDataBuilder) shouldReuseEntityStruct(structOut, structIn string, config *opts.NestedGroupConfig) bool {
+	// If marked as composite, don't treat as entity struct
+	if config.IsComposite != nil && *config.IsComposite {
+		return false
+	}
+
+	// Check if the struct exists in the schema
+	if !b.structExistsInSchema(structIn) {
+		return false
+	}
+
+	// If this struct has nested configurations, we need to use the generated struct
+	// because it needs to contain the nested fields (like Reviews in Book)
+	if len(config.Group) > 0 {
+		return false
+	}
+
+	// If structIn exists in schema and has no nesting, reuse the entity struct
+	return true
+}
+
+// structExistsInSchema checks if a struct name exists in the schema structs
+func (b *NestedQueryTemplateDataBuilder) structExistsInSchema(structName string) bool {
+	for _, s := range b.structs {
+		if s.Name == structName {
+			return true
+		}
+	}
+	return false
+}
+
+// getCurrentStructFields extracts nested fields from the struct fields
+func (b *NestedQueryTemplateDataBuilder) getNonNestedStructFields(fields []Field, groupConfig []*opts.NestedGroupConfig) []Field {
+	return b.extractFields(
+		fields,
+		getNestedFields(groupConfig),
+		"",
+	)
 }
 
 // determineKeyType determines the key type for the map based on the field
@@ -438,291 +550,71 @@ func determineKeyType(field string) string {
 	return "pgtype.UUID"
 }
 
-// pluralizeWithCase properly pluralizes a word while preserving its case
-func pluralizeWithCase(word string) string {
-	if word == "" {
-		return word
+// getFieldNameFromNestedConfig determines the field name for a nested configuration
+// Uses field_out if specified, otherwise generates from struct_in based on slice configuration
+func getFieldNameFromNestedConfig(nested *opts.NestedGroupConfig) string {
+	fieldName := nested.FieldOut
+	if fieldName == "" {
+		// Use default field naming logic
+		if nested.IsSlice == nil || *nested.IsSlice {
+			fieldName = PluralizeCasePreserving(nested.StructIn)
+		} else {
+			fieldName = SingularizeCasePreserving(nested.StructIn)
+		}
 	}
-
-	// Convert to lowercase for flect processing
-	lowercaseWord := strings.ToLower(word)
-	pluralized := flect.Pluralize(lowercaseWord)
-
-	// Preserve the original case - if first letter was uppercase, make result uppercase
-	if len(word) > 0 && word[0] >= 'A' && word[0] <= 'Z' {
-		return strings.ToUpper(pluralized[:1]) + pluralized[1:]
-	}
-
-	return pluralized
+	return fieldName
 }
 
-// singularizeWithCase properly singularizes a word while preserving its case
-func singularizeWithCase(word string) string {
-	if word == "" {
-		return word
+// getFieldType gets the field type for a nested struct based on the configuration
+func (b *NestedQueryTemplateDataBuilder) getFieldType(
+	structIn, structOut string,
+	isSlice, isPointer, isEntityStruct bool,
+	nestedConfig *opts.NestedGroupConfig, // Optional, used for entity struct detection when available
+) string {
+	// Determine if we should use entity prefix for the type or reuse composite struct
+	useEntityPrefix := isEntityStruct
+	if !useEntityPrefix && nestedConfig != nil {
+		useEntityPrefix = b.shouldReuseEntityStruct(structOut, structIn, nestedConfig)
 	}
 
-	// Convert to lowercase for flect processing
-	lowercaseWord := strings.ToLower(word)
-	singularized := flect.Singularize(lowercaseWord)
-
-	// Preserve the original case - if first letter was uppercase, make result uppercase
-	if len(word) > 0 && word[0] >= 'A' && word[0] <= 'Z' {
-		return strings.ToUpper(singularized[:1]) + singularized[1:]
+	structType := structOut
+	if useEntityPrefix {
+		structType = fmt.Sprintf("entity.%s", structIn)
 	}
 
-	return singularized
+	var fieldType string
+	if isSlice {
+		if isPointer {
+			fieldType = fmt.Sprintf("[]*%s", structType)
+		} else {
+			fieldType = fmt.Sprintf("[]%s", structType)
+		}
+	} else {
+		if isPointer {
+			fieldType = fmt.Sprintf("*%s", structType)
+		} else {
+			fieldType = structType
+		}
+	}
+
+	return fieldType
 }
 
-// nestedTemplate is the template for generating nested grouping functions
-const nestedTemplate = `{{- $rootStruct := .RootStruct}}
-{{- $queryName := .QueryName}}
-{{- $keyType := .KeyType}}
-{{- $groupField := .GroupField}}
-{{- $generateStructs := .GenerateStructs}}
+// isQueryRootComposite checks if any nested config's StructRoot matches the current composite struct
+func (b *NestedQueryTemplateDataBuilder) isQueryRootComposite(config *opts.NestedGroupConfig) bool {
+	// Only check for composite structs
+	if !config.GetIsComposite() {
+		return false
+	}
 
-{{- range .GenerateStructs}}
-// {{.Name}} represents grouped data for {{.Name}}
-type {{.Name}} struct {
-{{- range .Fields}}
-	{{- if $.EmitJSONTags}}
-	{{.Name}} {{.Type}} ` + "`json:\"{{.JsonTag}}\"`" + `
-	{{- else}}
-	{{.Name}} {{.Type}}
-	{{- end}}
-{{- end}}
-{{- range .NestedArrays}}
-	{{- if $.EmitJSONTags}}
-	{{.Name}} {{.Type}} ` + "`json:\"{{.JsonTag}}\"`" + `
-	{{- else}}
-	{{.Name}} {{.Type}}
-	{{- end}}
-{{- end}}
-}
-{{- end}}
-
-// {{.FunctionName}} groups flat {{.QueryName}} rows into nested {{.RootStruct}} structures
-func {{.FunctionName}}(rows []{{if .EmitPointers}}*{{end}}{{.QueryName}}Row) []{{if .EmitPointers}}*{{end}}{{.RootStruct}} {
-	{{.RootStruct | camelCase}}Map := make(map[{{.KeyType}}]*{{.RootStruct}})
-
-	for _, r := range rows {
-		{{.RootStruct | camelCase}} := getOrCreate{{.RootStruct}}({{.RootStruct | camelCase}}Map, r)
-
-		{{- range .NestedStructs}}
-		{{- $parentStruct := .}}
-		// Handle {{.StructOut}} nested relationship
-		if r.{{.StructIn}}.ID.Valid {
-			{{- if .Nested}}
-			{{.StructIn | camelCase}} := getOrCreate{{.StructOut}}({{$.RootStruct | camelCase}}, r)
-			{{- range .Nested}}
-			// Handle {{.StructOut}} nested within {{$parentStruct.StructIn}}
-			if r.{{.StructIn}}.ID.Valid {
-				getOrCreate{{.StructOut}}({{$parentStruct.StructIn | camelCase}}, r)
+	// Iterate through all nested configs to check if any StructRoot matches the current composite struct
+	for _, nestedItem := range b.nested {
+		for _, nestedConfig := range nestedItem.Configs {
+			if nestedConfig.StructRoot == config.StructOut {
+				return true
 			}
-			{{- end}}
-			{{- else}}
-			getOrCreate{{.StructOut}}({{$.RootStruct | camelCase}}, r)
-			{{- end}}
 		}
-		{{- end}}
 	}
 
-	{{- if .EmitPointers}}
-	var result []*{{.RootStruct}}
-	for _, {{.RootStruct | camelCase}} := range {{.RootStruct | camelCase}}Map {
-		result = append(result, {{.RootStruct | camelCase}})
-	}
-	{{- else}}
-	var result []{{.RootStruct}}
-	for _, {{.RootStruct | camelCase}} := range {{.RootStruct | camelCase}}Map {
-		result = append(result, *{{.RootStruct | camelCase}})
-	}
-	{{- end}}
-
-	return result
+	return false
 }
-
-// getOrCreate{{.RootStruct}} gets or creates a {{.RootStruct}} from the map
-func getOrCreate{{.RootStruct}}({{.RootStruct | camelCase}}Map map[{{.KeyType}}]*{{.RootStruct}}, r {{if .EmitPointers}}*{{end}}{{.QueryName}}Row) *{{.RootStruct}} {
-	if {{.RootStruct | camelCase}}, exists := {{.RootStruct | camelCase}}Map[r.{{.GroupField}}]; exists {
-		return {{.RootStruct | camelCase}}
-	}
-
-	{{.RootStruct | camelCase}} := &{{.RootStruct}}{
-		{{- range .GenerateStructs}}
-		{{- if eq .Name $rootStruct}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-	{{.RootStruct | camelCase}}Map[r.{{.GroupField}}] = {{.RootStruct | camelCase}}
-	return {{.RootStruct | camelCase}}
-}
-
-{{- range .NestedStructs}}
-{{- $currentStruct := .}}
-// getOrCreate{{.StructOut}} gets or creates a {{.StructOut}} within the parent structure
-func getOrCreate{{.StructOut}}(parent *{{$rootStruct}}, r {{if $.EmitPointers}}*{{end}}{{$queryName}}Row) *{{.StructOut}} {
-	{{- if .IsSlice}}
-	// Check if {{.StructOut}} already exists in parent slice
-	for i := range parent.{{.FieldName}} {
-		{{- if .IsPointer}}
-		if parent.{{.FieldName}}[i].ID == r.{{.StructIn}}.ID {
-			return parent.{{.FieldName}}[i]
-		}
-		{{- else}}
-		if parent.{{.FieldName}}[i].ID == r.{{.StructIn}}.ID {
-			return &parent.{{.FieldName}}[i]
-		}
-		{{- end}}
-	}
-
-	// Create new {{.StructOut}} with auto-extracted field mapping
-	{{- if .IsPointer}}
-	newItem := &{{.StructOut}}{
-	{{- else}}
-	newItem := {{.StructOut}}{
-	{{- end}}
-		{{- $currentStructOut := .StructOut}}
-		{{- range $generateStructs}}
-		{{- if eq .Name $currentStructOut}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-
-	parent.{{.FieldName}} = append(parent.{{.FieldName}}, newItem)
-	{{- if .IsPointer}}
-	return newItem
-	{{- else}}
-	return &parent.{{.FieldName}}[len(parent.{{.FieldName}})-1]
-	{{- end}}
-	{{- else}}
-	// Single object case - check if already set
-	{{- if .IsPointer}}
-	if parent.{{.FieldName}} != nil && parent.{{.FieldName}}.ID.Valid && parent.{{.FieldName}}.ID == r.{{.StructIn}}.ID {
-		return parent.{{.FieldName}}
-	}
-
-	// Create new {{.StructOut}} with auto-extracted field mapping
-	parent.{{.FieldName}} = &{{.StructOut}}{
-		{{- $currentStructOut := .StructOut}}
-		{{- range $generateStructs}}
-		{{- if eq .Name $currentStructOut}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-
-	return parent.{{.FieldName}}
-	{{- else}}
-	if parent.{{.FieldName}}.ID.Valid && parent.{{.FieldName}}.ID == r.{{.StructIn}}.ID {
-		return &parent.{{.FieldName}}
-	}
-
-	// Create new {{.StructOut}} with auto-extracted field mapping
-	parent.{{.FieldName}} = {{.StructOut}}{
-		{{- $currentStructOut := .StructOut}}
-		{{- range $generateStructs}}
-		{{- if eq .Name $currentStructOut}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-
-	return &parent.{{.FieldName}}
-	{{- end}}
-	{{- end}}
-}
-
-{{- range .Nested}}
-// getOrCreate{{.StructOut}} gets or creates a {{.StructOut}} within the {{$currentStruct.StructOut}} structure
-func getOrCreate{{.StructOut}}(parent *{{$currentStruct.StructOut}}, r {{if $.EmitPointers}}*{{end}}{{$queryName}}Row) *{{.StructOut}} {
-	{{- if .IsSlice}}
-	// Check if {{.StructOut}} already exists in parent slice
-	for i := range parent.{{.FieldName}} {
-		{{- if .IsPointer}}
-		if parent.{{.FieldName}}[i].ID == r.{{.StructIn}}.ID {
-			return parent.{{.FieldName}}[i]
-		}
-		{{- else}}
-		if parent.{{.FieldName}}[i].ID == r.{{.StructIn}}.ID {
-			return &parent.{{.FieldName}}[i]
-		}
-		{{- end}}
-	}
-
-	// Create new {{.StructOut}} with auto-extracted field mapping
-	{{- if .IsPointer}}
-	newItem := &{{.StructOut}}{
-	{{- else}}
-	newItem := {{.StructOut}}{
-	{{- end}}
-		{{- $currentStructOut := .StructOut}}
-		{{- range $generateStructs}}
-		{{- if eq .Name $currentStructOut}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-
-	parent.{{.FieldName}} = append(parent.{{.FieldName}}, newItem)
-	{{- if .IsPointer}}
-	return newItem
-	{{- else}}
-	return &parent.{{.FieldName}}[len(parent.{{.FieldName}})-1]
-	{{- end}}
-	{{- else}}
-	// Single object case - check if already set
-	{{- if .IsPointer}}
-	if parent.{{.FieldName}} != nil && parent.{{.FieldName}}.ID.Valid && parent.{{.FieldName}}.ID == r.{{.StructIn}}.ID {
-		return parent.{{.FieldName}}
-	}
-
-	// Create new {{.StructOut}} with auto-extracted field mapping
-	parent.{{.FieldName}} = &{{.StructOut}}{
-		{{- $currentStructOut := .StructOut}}
-		{{- range $generateStructs}}
-		{{- if eq .Name $currentStructOut}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-
-	return parent.{{.FieldName}}
-	{{- else}}
-	if parent.{{.FieldName}}.ID.Valid && parent.{{.FieldName}}.ID == r.{{.StructIn}}.ID {
-		return &parent.{{.FieldName}}
-	}
-
-	// Create new {{.StructOut}} with auto-extracted field mapping
-	parent.{{.FieldName}} = {{.StructOut}}{
-		{{- $currentStructOut := .StructOut}}
-		{{- range $generateStructs}}
-		{{- if eq .Name $currentStructOut}}
-		{{- range .Fields}}
-		{{.Name}}: r.{{.RowField}},
-		{{- end}}
-		{{- end}}
-		{{- end}}
-	}
-
-	return &parent.{{.FieldName}}
-	{{- end}}
-	{{- end}}
-}
-{{- end}}
-{{- end}}
-`

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -24,10 +25,12 @@ type tmplCtx struct {
 	Enums       []Enum
 	Structs     []Struct
 	GoQueries   []Query
+	Nested      []Nested
 	SqlcVersion string
 
 	// TODO: Race conditions
 	SourceName string
+	FileName   string
 
 	EmitJSONTags              bool
 	JsonTagsIDUppercase       bool
@@ -42,6 +45,7 @@ type tmplCtx struct {
 	UsesBatch                 bool
 	OmitSqlcVersion           bool
 	BuildTags                 string
+	OutputModelsPackage       string
 }
 
 func (t *tmplCtx) OutputQuery(sourceName string) bool {
@@ -122,6 +126,23 @@ func Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.Generat
 		return nil, err
 	}
 
+	// Populate nested config with default values to avoid checking it accross all the code
+	if err := populateNestedConfigWithDefaultValues(options); err != nil {
+		return nil, err
+	}
+
+	// Get nested source with configs
+	nestedWithoutData, err := getNestedSourceWithConfigs(options, queries, structs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate nested data items
+	nestedWithData, err := populateNestedDataItems(options, queries, structs, nestedWithoutData)
+	if err != nil {
+		return nil, err
+	}
+
 	if options.OmitUnusedStructs {
 		enums, structs = filterUnusedStructs(options, enums, structs, queries)
 	}
@@ -130,7 +151,7 @@ func Generate(ctx context.Context, req *plugin.GenerateRequest) (*plugin.Generat
 		return nil, err
 	}
 
-	return generate(req, options, enums, structs, queries)
+	return generate(req, options, enums, structs, queries, nestedWithData)
 }
 
 func validate(options *opts.Options, enums []Enum, structs []Struct, queries []Query) error {
@@ -160,7 +181,14 @@ func validate(options *opts.Options, enums []Enum, structs []Struct, queries []Q
 	return nil
 }
 
-func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, structs []Struct, queries []Query) (*plugin.GenerateResponse, error) {
+func generate(
+	req *plugin.GenerateRequest,
+	options *opts.Options,
+	enums []Enum,
+	structs []Struct,
+	queries []Query,
+	nested []Nested,
+) (*plugin.GenerateResponse, error) {
 	i := &importer{
 		Options: options,
 		Queries: queries,
@@ -178,6 +206,7 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 		EmitMethodsWithDBArgument: options.EmitMethodsWithDbArgument,
 		EmitEnumValidMethod:       options.EmitEnumValidMethod,
 		EmitAllEnumValues:         options.EmitAllEnumValues,
+		OutputModelsPackage:       options.OutputModelsPackage,
 		UsesCopyFrom:              usesCopyFrom(queries),
 		UsesBatch:                 usesBatch(queries),
 		SQLDriver:                 parseDriver(options.SqlPackage),
@@ -185,6 +214,7 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 		Package:                   options.Package,
 		Enums:                     enums,
 		Structs:                   structs,
+		Nested:                    nested,
 		SqlcVersion:               req.SqlcVersion,
 		BuildTags:                 options.BuildTags,
 		OmitSqlcVersion:           options.OmitSqlcVersion,
@@ -205,14 +235,30 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 		return nil, errors.New(":batch* commands are only supported by pgx")
 	}
 
+	var tmpl *template.Template
 	funcMap := template.FuncMap{
 		"lowerTitle": sdk.LowerTitle,
+		"upperTitle": upperTitle,
 		"comment":    sdk.DoubleSlashComment,
 		"escape":     sdk.EscapeBacktick,
 		"imports":    i.Imports,
 		"hasImports": i.HasImports,
 		"hasPrefix":  strings.HasPrefix,
 		"trimPrefix": strings.TrimPrefix,
+		"camelCase":  ToCamelCase,
+		"ternary":    ternary,
+		"joinTags":   joinTags,
+		"list":       list,
+		"add":        add,
+		"dict":       dict,
+		"set":        set,
+		"render": func(name string, data any) string {
+			var buf bytes.Buffer
+			if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+				return fmt.Sprintf("ERR: %v", err)
+			}
+			return buf.String()
+		},
 
 		// These methods are Go specific, they do not belong in the codegen package
 		// (as that is language independent)
@@ -222,7 +268,7 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 		"queryRetval":         tctx.codegenQueryRetval,
 	}
 
-	tmpl := template.Must(
+	tmpl = template.Must(
 		template.New("table").
 			Funcs(funcMap).
 			ParseFS(
@@ -234,15 +280,21 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 
 	output := map[string]string{}
 
-	execute := func(name, packageName, templateName string) error {
-		imports := i.Imports(name)
+	execute := func(fileName, packageName, templateName string) error {
+		imports := i.Imports(fileName)
 		replacedQueries := replaceConflictedArg(imports, queries)
 
 		var b bytes.Buffer
 		w := bufio.NewWriter(&b)
-		tctx.SourceName = name
+		tctx.FileName = fileName
+		tctx.SourceName = fileName
+		if templateName == "nestedCoreFile" {
+			tctx.SourceName = extractSqlFileNameFromNestedFileName(fileName)
+		}
+
 		tctx.GoQueries = replacedQueries
 		tctx.Package = packageName
+
 		err := tmpl.ExecuteTemplate(w, templateName, &tctx)
 		w.Flush()
 		if err != nil {
@@ -250,23 +302,31 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 		}
 		code, err := format.Source(b.Bytes())
 		if err != nil {
-			fmt.Println(b.String())
+			// Write debug info to stderr instead of stdout to avoid corrupting protobuf
+			fmt.Fprintf(os.Stderr, "Source formatting error for %s:\n%s\n", fileName, b.String())
 			return fmt.Errorf("source error: %w", err)
 		}
 
-		if templateName == "queryFile" {
+		if templateName == "queryFile" || templateName == "nestedUtilsFile" {
 			if options.OutputQueryFilesDirectory != "" {
-				name = filepath.Join(options.OutputQueryFilesDirectory, name)
-			}
-			if options.OutputFilesSuffix != "" {
-				name += options.OutputFilesSuffix
+				fileName = filepath.Join(options.OutputQueryFilesDirectory, fileName)
 			}
 		}
 
-		if !strings.HasSuffix(name, ".go") {
-			name += ".go"
+		if templateName == "queryFile" {
+			if options.OutputFilesSuffix != "" {
+				fileName += options.OutputFilesSuffix
+			}
 		}
-		output[name] = string(code)
+
+		if templateName == "nestedUtilsFile" {
+			fileName = strings.TrimSuffix(fileName, ".go") + options.OutputFilesSuffix
+		}
+
+		if !strings.HasSuffix(fileName, ".go") {
+			fileName += ".go"
+		}
+		output[fileName] = string(code)
 		return nil
 	}
 
@@ -290,6 +350,11 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 	batchFileName := "batch.go"
 	if options.OutputBatchFileName != "" {
 		batchFileName = options.OutputBatchFileName
+	}
+
+	nestedUtilsFileName := "nested.utils.go"
+	if options.OutputNestedUtilsFileName != "" {
+		nestedUtilsFileName = options.OutputNestedUtilsFileName
 	}
 
 	modelsPackageName := options.Package
@@ -331,73 +396,18 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 	}
 
 	// Generate nested grouping functions if configured
-	if len(options.Nested) > 0 {
-		// Group nested configs by query source file
-		nestedBySource := make(map[string][]opts.NestedQueryConfig)
-		for _, config := range options.Nested {
-			// Find the source file for this query
-			var sourceFile string
-			for _, q := range queries {
-				if q.MethodName == config.Query || q.SourceName == config.Query {
-					sourceFile = q.SourceName
-					break
-				}
-			}
-			if sourceFile != "" {
-				nestedBySource[sourceFile] = append(nestedBySource[sourceFile], config)
+	if len(nested) > 0 {
+		// Generate _nested.sql files
+		for _, nestedItem := range nested {
+			nestedFileName := getNestedFileName(options, nestedItem.SourceFileName)
+			if err := execute(nestedFileName, options.Package, "nestedCoreFile"); err != nil {
+				return nil, err
 			}
 		}
 
-		// Generate nested file for each source
-		for sourceFile, configs := range nestedBySource {
-			nestedFunctions, err := generateNestedGroupingFunctionsForSource(options, queries, structs, configs)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate nested functions for %s: %w", sourceFile, err)
-			}
-
-			if len(nestedFunctions) > 0 {
-				// Create nested file based on source file name
-				baseFileName := strings.TrimSuffix(sourceFile, ".sql")
-				nestedFileName := baseFileName + "_nested.sql.go"
-				if options.OutputFilesSuffix != "" {
-					nestedFileName = baseFileName + "_nested.sql" + options.OutputFilesSuffix + ".go"
-				}
-
-				// Apply output_query_files_directory logic like query files
-				if options.OutputQueryFilesDirectory != "" {
-					nestedFileName = filepath.Join(options.OutputQueryFilesDirectory, nestedFileName)
-				}
-
-				// Get models package import path and name
-				modelsPackageImport := options.ModelsPackageImportPath
-				modelsPackageName := ""
-				if modelsPackageImport != "" {
-					parts := strings.Split(modelsPackageImport, "/")
-					modelsPackageName = parts[len(parts)-1]
-				}
-
-				// Add package and imports
-				header := fmt.Sprintf("// Code generated by sqlc. DO NOT EDIT.\n\npackage %s\n\nimport (\n\t\"github.com/jackc/pgx/v5/pgtype\"\n", options.Package)
-				if options.ModelsPackageImportPath != "" && modelsPackageName != "" {
-					for _, nestedFunction := range nestedFunctions {
-						if strings.Contains(nestedFunction, modelsPackageName+".") {
-							header += fmt.Sprintf("\t\"%s\"\n", options.ModelsPackageImportPath)
-							break
-						}
-					}
-				}
-				header += ")\n\n"
-
-				nestedCode := header + strings.Join(nestedFunctions, "\n\n")
-
-				// Format the nested code
-				formattedCode, err := format.Source([]byte(nestedCode))
-				if err != nil {
-					return nil, fmt.Errorf("failed to format nested code: %w", err)
-				}
-
-				output[nestedFileName] = string(formattedCode)
-			}
+		// Generate nested.gen if any nested files were generated
+		if err := execute(nestedUtilsFileName, options.Package, "nestedUtilsFile"); err != nil {
+			return nil, err
 		}
 	}
 
@@ -411,6 +421,90 @@ func generate(req *plugin.GenerateRequest, options *opts.Options, enums []Enum, 
 	}
 
 	return &resp, nil
+}
+
+type Nested struct {
+	SourceFileName  string
+	Configs         []*opts.NestedQueryConfig
+	NestedDataItems []NestedQueryTemplateData
+}
+
+// getNestedSourceWithConfigs creates ordered list of source files with their configs
+func getNestedSourceWithConfigs(options *opts.Options, queries []Query, structs []Struct) ([]Nested, error) {
+	if options.Nested == nil || len(options.Nested.Queries) == 0 {
+		return nil, nil
+	}
+
+	var sources []Nested
+	seen := make(map[string]bool)
+
+	for _, config := range options.Nested.Queries {
+		// Find the source file for this query
+		var sourceFile string
+		for _, q := range queries {
+			if q.MethodName == config.Query || q.SourceName == config.Query {
+				sourceFile = q.SourceName
+				break
+			}
+		}
+		if sourceFile != "" {
+			if !seen[sourceFile] {
+				// First time seeing this source file, create new entry
+				sources = append(sources, Nested{
+					SourceFileName: sourceFile,
+					Configs:        []*opts.NestedQueryConfig{config},
+				})
+				seen[sourceFile] = true
+			} else {
+				// Add config to existing entry
+				for i := range sources {
+					if sources[i].SourceFileName == sourceFile {
+						sources[i].Configs = append(sources[i].Configs, config)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return sources, nil
+}
+
+var nestedFileNameSuffix = "_nested.sql"
+
+func getNestedFileName(options *opts.Options, fileName string) string {
+	baseFileName := strings.TrimSuffix(fileName, ".sql")
+	nestedFileName := baseFileName + nestedFileNameSuffix + ".go"
+	if options.OutputFilesSuffix != "" {
+		nestedFileName = baseFileName + nestedFileNameSuffix + options.OutputFilesSuffix + ".go"
+	}
+
+	// Apply output_query_files_directory logic like query files
+	if options.OutputQueryFilesDirectory != "" {
+		nestedFileName = filepath.Join(options.OutputQueryFilesDirectory, nestedFileName)
+	}
+
+	return nestedFileName
+}
+
+func isNestedFileName(fileName string) bool {
+	return strings.Contains(fileName, nestedFileNameSuffix) && strings.HasSuffix(fileName, ".go")
+}
+
+func extractSqlFileNameFromNestedFileName(fileName string) string {
+	// Remove directory path if present and .go extension
+	baseName := strings.TrimSuffix(filepath.Base(fileName), ".go")
+
+	// Remove output files suffix if present
+	nestedIndex := strings.Index(baseName, nestedFileNameSuffix)
+	if nestedIndex != -1 {
+		// Extract everything before "_nested.sql"
+		sourceBase := baseName[:nestedIndex]
+		return sourceBase + ".sql"
+	}
+
+	// Fallback: if pattern doesn't match expected format, return as-is with .sql
+	return strings.TrimSuffix(baseName, nestedFileNameSuffix) + ".sql"
 }
 
 func usesCopyFrom(queries []Query) bool {

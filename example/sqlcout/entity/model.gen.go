@@ -9,30 +9,30 @@ import (
 )
 
 type Author struct {
-	ID        pgtype.UUID
+	Id        pgtype.UUID
 	Name      string
 	Age       int32
 	CreatedAt pgtype.Timestamptz
 }
 
 type Book struct {
-	ID          pgtype.UUID
+	Id          pgtype.UUID
 	Title       string
-	AuthorID    pgtype.UUID
+	AuthorId    pgtype.UUID
 	PublishedAt pgtype.Date
 	CreatedAt   pgtype.Timestamptz
 }
 
 type Label struct {
-	ID        pgtype.UUID
+	Id        pgtype.UUID
 	Title     string
-	AuthorID  pgtype.UUID
+	AuthorId  pgtype.UUID
 	CreatedAt pgtype.Timestamptz
 }
 
 type Review struct {
-	ID           pgtype.UUID
-	BookID       pgtype.UUID
+	Id           pgtype.UUID
+	BookId       pgtype.UUID
 	Rating       int32
 	Comment      pgtype.Text
 	ReviewerName pgtype.Text

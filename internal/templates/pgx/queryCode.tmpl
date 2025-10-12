@@ -1,4 +1,6 @@
 {{define "queryCodePgx"}}
+{{$modelsPackage := .OutputModelsPackage}}
+
 {{range .GoQueries}}
 {{if $.OutputQuery .SourceName}}
 {{if and (ne .Cmd ":copyfrom") (ne (hasPrefix .Cmd ":batch") true)}}
@@ -20,6 +22,8 @@ type {{.Ret.Type}} struct { {{- range .Ret.Struct.Fields}}
   {{.Name}} {{.Type}} {{if .Tag}}{{$.Q}}{{.Tag}}{{$.Q}}{{end}}
   {{- end}}
 }
+
+{{ template "nestedRowEntityFieldGetter" (list . $modelsPackage) }}
 {{end}}
 {{end}}
 

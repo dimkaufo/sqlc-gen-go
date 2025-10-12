@@ -19,6 +19,7 @@ example/
 │       ├── queries.gen.go         # Core query interface
 │       ├── authors.sql.gen.go     # Standard author query functions
 │       ├── authors_nested.sql.gen.go  # Nested grouping functions
+│       ├── nested.gen.go          # Shared utility functions
 │       └── books.sql.gen.go       # Book query functions
 ├── example.go           # Demo showing plugin functionality
 ├── go.mod              # Go module configuration
@@ -29,17 +30,20 @@ example/
 ## Key Features Demonstrated
 
 ### 🔹 **Multi-Package Organization**
+
 - **Entity Package**: Clean separation of database models in `entity/model.gen.go`
 - **Query Package**: All query functions organized in the `query/` directory
 - **Import Path Support**: Proper cross-package imports with configurable paths
 
 ### 🔹 **Nested Result Grouping** (NEW!)
+
 - **Automatic Grouping**: Converts flat JOIN result rows into nested Go structures
 - **Multi-level Nesting**: Supports deep nesting (Author → Books → Reviews)
 - **Type Safety**: Full compile-time type checking for all nested structures
 - **Flexible Configuration**: YAML-based configuration for grouping behavior
 
 ### 🔹 **Advanced SQL Features**
+
 - **Complex JOINs**: Multi-table LEFT JOINs with proper null handling
 - **Embedded Results**: Uses `sqlc.embed()` for clean column organization
 - **UUID Support**: Native PostgreSQL UUID support with `pgtype.UUID`
@@ -50,6 +54,7 @@ example/
 The plugin automatically generates grouping functions that transform flat SQL results into nested structures:
 
 **Input (Flat Rows):**
+
 ```sql
 -- Query with JOINs returns flat rows
 SELECT a.id, a.name, sqlc.embed(b), sqlc.embed(r), sqlc.embed(l)
@@ -60,24 +65,32 @@ LEFT JOIN labels l ON l.author_id = a.id
 ```
 
 **Output (Nested Structures):**
+
 ```go
 type GetAuthorsGroup struct {
-    ID     pgtype.UUID
-    Name   string
-    Age    int32
-    Books  []*GetAuthorsBook      // Nested books
-    Labels []*GetAuthorsLabel     // Nested labels
+    ID   pgtype.UUID
+    Name string
+    Age  int32
+
+    // Nested fields
+    Publications []*GetAuthorsBook
+    AuthorLabels []*entity.Label
 }
 
 type GetAuthorsBook struct {
     ID          pgtype.UUID
     Title       string
     AuthorID    pgtype.UUID
-    Reviews     []*GetAuthorsBookReview  // Double-nested reviews
+    PublishedAt pgtype.Date
+    CreatedAt   pgtype.Timestamptz
+
+    // Nested fields
+    BookReviews []*entity.Review
 }
 ```
 
 **Generated Grouping Function:**
+
 ```go
 func GroupGetAuthors(rows []*GetAuthorsRow) []*GetAuthorsGroup {
     // Automatically groups flat rows into nested structure
@@ -101,17 +114,17 @@ sql:
         options:
           package: "query"
           sql_package: "pgx/v5"
-          
+  
           # Multi-package output organization
           output_query_files_directory: "query"
           output_models_file_name: "entity/model.gen.go"
           output_models_package: "entity"
           models_package_import_path: "github.com/sqlc-dev/sqlc-gen-go/example/sqlcout/entity"
-          
+  
           # Pointer configuration
           emit_result_struct_pointers: true
           emit_params_struct_pointers: true
-          
+  
           # Nested grouping configuration
           nested:
             - query: "GetAuthors"                    # Query to enhance
@@ -119,28 +132,40 @@ sql:
               group:
                 - struct_in: "Book"                  # Input field name
                   struct_out: "GetAuthorsBook"       # Output struct name
-                  nested:                            # Sub-nesting
+                  field_out: "Publications"          # Custom field name
+                  group:                            # Sub-nesting
                     - struct_in: "Review"
-                      struct_out: "GetAuthorsBookReview"
+                      field_out: "BookReviews"       # Custom field name
                 - struct_in: "Label"
-                  struct_out: "GetAuthorsLabel"
+                  field_out: "AuthorLabels"          # Custom field name
+            - query: "GetAuthor"                     # Second query
+              struct_root: "GetAuthorGroup"          # Different root struct
+              group:
+                - struct_in: "Book"
+                  struct_out: "GetAuthorBook"
+                  group:
+                    - struct_in: "Review"
+                      struct_out: "GetAuthorBookReview"
+                - struct_in: "Label"
+                  struct_out: "GetAuthorLabel"
 ```
 
 ## Running the Example
 
 1. **Build the plugin** (from the root directory):
+
    ```bash
    cd ..
    make bin/sqlc-gen-go
    ```
-
 2. **Generate SQLC code**:
+
    ```bash
    cd example/sqlcin
    sqlc generate
    ```
-
 3. **Run the demo**:
+
    ```bash
    cd ..
    go run example.go
@@ -149,6 +174,7 @@ sql:
 ## Expected Output
 
 The demo will show:
+
 1. **Input**: Flat rows from JOIN query (showing duplicated author/book data)
 2. **Processing**: Plugin-generated grouping function in action
 3. **Output**: Clean nested structure with proper deduplication
@@ -169,12 +195,12 @@ Row 3: Author=J.K. Rowling, Book=Harry Potter and the Philosopher's Stone, Revie
 Output: 3 authors with nested books and reviews
 ----
 Author 1: J.K. Rowling (ID: ...)
-  Book 1: Harry Potter and the Sorcerer's Stone (ID: ...)
-    Review 1: 5 stars by Alice (ID: ...)
-    Review 2: 4 stars by Bob (ID: ...)
-  Book 2: Harry Potter and the Philosopher's Stone (ID: ...)
-    Review 1: 5 stars by Carol (ID: ...)
-  Labels:
+  Publication 1: Harry Potter and the Sorcerer's Stone (ID: ...)
+    Book Review 1: 5 stars by Alice (ID: ...)
+    Book Review 2: 4 stars by Bob (ID: ...)
+  Publication 2: Harry Potter and the Philosopher's Stone (ID: ...)
+    Book Review 1: 5 stars by Carol (ID: ...)
+  Author Labels:
     Label 1: Fantasy (ID: ...)
 
 🎉 Plugin working correctly with real SQLC generated code!
@@ -182,22 +208,28 @@ Author 1: J.K. Rowling (ID: ...)
 
 ## Advanced Features
 
-### ✨ **Pluralization Handling**
-- Automatic proper pluralization (e.g., "Vacancy" → "Vacancies", not "Vacancys")
-- Case-preserving pluralization for Go struct field names
-- Uses `github.com/gobuffalo/flect` for linguistic accuracy
+### ✨ **Custom Field Naming**
+
+- Configurable field names using `field_out` option
+- Descriptive field names (e.g., "Publications" instead of "Books")
+- Context-aware naming (e.g., "BookReviews" instead of "Reviews")
+- Automatic exclusion of nested fields from root struct
 
 ### ✨ **Type Safety & Performance**
+
 - Zero reflection - all code generated at compile time
 - Proper null handling with `pgtype` package
-- Memory-efficient grouping algorithms
+- Optimized nested maps with shared utilities
+- Entity struct optimization with direct parameter usage
 - Full IDE support with auto-completion
 
 ### ✨ **Flexible Configuration**
+
 - Per-query grouping configuration
 - Customizable struct names and relationships
 - Support for both slice and single object relationships
 - Configurable pointer vs value semantics
+- Multiple query support with different nesting structures
 
 ## Files Generated
 
@@ -205,6 +237,7 @@ Author 1: J.K. Rowling (ID: ...)
 - `query/queries.gen.go`: Core Queries interface and constructor
 - `query/authors.sql.gen.go`: Standard SQLC query functions (GetAuthors, GetAuthor)
 - `query/authors_nested.sql.gen.go`: **NEW** - Nested grouping functions (GroupGetAuthors, GroupGetAuthor)
+- `query/nested.gen.go`: **NEW** - Shared utility functions for nested grouping
 - `query/books.sql.gen.go`: Book-related query functions
 
 This example demonstrates how `sqlc-gen-go` bridges the gap between flat SQL results and clean, type-safe Go data structures, making it easy to work with complex relational data in Go applications.

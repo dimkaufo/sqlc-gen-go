@@ -55,3 +55,13 @@ func StructName(name string, options *opts.Options) string {
 		return out
 	}
 }
+
+// getStructByName retrieves a struct definition by name
+func getStructByName(structs []Struct, structName string) *Struct {
+	for _, s := range structs {
+		if s.Name == structName {
+			return &s
+		}
+	}
+	return nil
+}

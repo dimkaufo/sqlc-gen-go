@@ -19,26 +19,38 @@ sql:
           emit_result_struct_pointers: true
           emit_params_struct_pointers: true
           nested:
-            - query: "GetAuthors"
-              struct_root: "GetAuthorsGroup"
-              group:
-                - struct_in: "Book"
-                  struct_out: "GetAuthorsBook"
-                  nested:
-                    - struct_in: "Review"
-                      struct_out: "GetAuthorsBookReview"
-                - struct_in: "Label"
-                  struct_out: "GetAuthorsLabel"
-            - query: "GetAuthor"
-              struct_root: "GetAuthorGroup"
-              group:
-                - struct_in: "Book"
-                  struct_out: "GetAuthorBook"
-                  nested:
-                    - struct_in: "Review"
-                      struct_out: "GetAuthorBookReview"
-                - struct_in: "Label"
-                  struct_out: "GetAuthorLabel"
+            composites:
+              - name: "GetAuthorBook"
+                group:
+                  - struct_in: "Review"
+                    struct_out: "GetAuthorBookReview"
+            queries:
+              - query: "GetAuthors"
+                struct_root: "GetAuthorsGroup"
+                group:
+                  - struct_in: "Book"
+                    struct_out: "GetAuthorBook"
+                    field_out: "Publications" # Custom field name in result struct instead of "Books"
+                    composite: true
+                  - struct_in: "Label"
+                    field_out: "AuthorLabels" # Custom field name instead of "Labels"
+              - query: "GetAuthor"
+                struct_root: "GetAuthorGroup"
+                group:
+                  - struct_in: "Book"
+                    struct_out: "GetAuthorBook"
+                    composite: true
+                  - struct_in: "Label"
+                    field_out: "AuthorLabels"
+              # Test composite functionality - reuse GetAuthorBook structure
+              - query: "GetBooks"
+                struct_root: "GetBooksGroup"
+                field_group_by: "AuthorID" # Group by AuthorID which is available in root
+                group:
+                  - struct_in: "Book"
+                    struct_out: "GetAuthorBook"
+                    composite: true # Reuse the existing GetAuthorBook structure
+
 plugins:
   - name: sqlc-gen-go
     process:

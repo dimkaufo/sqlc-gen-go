@@ -1,0 +1,17 @@
+{{- /* Generate nested row entity field getter */ -}}
+{{ define "nestedRowEntityFieldGetter" -}}
+    {{- $query := index . 0 -}}
+    {{- $modelsPackage := index . 1 -}}
+
+    {{if $query.Ret.EmitStruct}}
+        {{- $RowStruct := $query.Ret.Type -}}
+        {{- range $query.Ret.UniqueFields}}
+            {{- $hasModelsPackagePrefix := hasPrefix .Type $modelsPackage -}}
+            {{- if $hasModelsPackagePrefix}}
+                func (r {{$RowStruct}}) Get{{.Name}}() {{.Type}} {
+                    return r.{{.Name}}
+                }
+            {{- end }}
+        {{ end }}
+    {{ end }}
+{{ end }}

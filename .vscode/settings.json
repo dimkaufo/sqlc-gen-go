@@ -1,0 +1,20 @@
+{
+    "go.toolsEnvVars": {
+        "CGO_ENABLED": "0"
+    },
+    "go.buildOnSave": "package",
+    "go.lintOnSave": "package",
+    "go.vetOnSave": "package",
+    "go.useLanguageServer": true,
+    "go.delveConfig": {
+        "dlvLoadConfig": {
+            "followPointers": true,
+            "maxVariableRecurse": 3,
+            "maxStringLen": 400,
+            "maxArrayValues": 400,
+            "maxStructFields": -1
+        },
+        "apiVersion": 2,
+        "showGlobalVariables": true
+    }
+}

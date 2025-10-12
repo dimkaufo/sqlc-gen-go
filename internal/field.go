@@ -97,19 +97,35 @@ func toPascalCase(s string) string {
 }
 
 func toCamelInitCase(name string, initUpper bool) string {
-	out := ""
-	for i, p := range strings.Split(name, "_") {
-		if !initUpper && i == 0 {
-			out += p
+	if name == "" {
+		return name
+	}
+
+	parts := strings.Split(name, "_")
+	var result strings.Builder
+
+	for i, part := range parts {
+		if part == "" {
 			continue
 		}
-		if p == "id" {
-			out += "ID"
+
+		if !initUpper && i == 0 {
+			// First part stays lowercase for camelCase
+			result.WriteString(strings.ToLower(part))
 		} else {
-			out += strings.Title(p)
+			// Check if this part is a common initialism
+			upperPart := strings.ToUpper(part)
+			if commonInitialisms[upperPart] {
+				result.WriteString(upperPart)
+			} else {
+				// Regular word - capitalize first letter
+				result.WriteString(strings.ToUpper(part[:1]))
+				result.WriteString(strings.ToLower(part[1:]))
+			}
 		}
 	}
-	return out
+
+	return result.String()
 }
 
 func toJsonCamelCase(name string, idUppercase bool) string {

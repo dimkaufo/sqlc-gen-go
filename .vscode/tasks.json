@@ -1,0 +1,132 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build sqlc-gen-go plugin",
+            "type": "shell",
+            "command": "go",
+            "args": [
+                "build",
+                "-o",
+                "bin/sqlc-gen-go",
+                "./plugin"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": "$go"
+        },
+        {
+            "label": "Run sqlc generate",
+            "type": "shell",
+            "command": "sqlc",
+            "args": ["generate"],
+            "options": {
+                "cwd": "${workspaceFolder}/example/sqlcin"
+            },
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": "Build sqlc-gen-go plugin"
+        },
+        {
+            "label": "Clean and rebuild",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build sqlc-gen-go plugin",
+                "Run sqlc generate"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "Setup Debug Environment",
+            "type": "shell",
+            "command": "./debug/debug-wrapper.sh",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Build Debug Binary",
+            "type": "shell",
+            "command": "go",
+            "args": [
+                "build",
+                "-gcflags=all=-N -l",
+                "-o",
+                "debug/sqlc-gen-go-debug",
+                "./plugin"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Capture Real Plugin Data",
+            "type": "shell",
+            "command": "./debug/capture/capture-real-data.sh",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean Debug Output",
+            "type": "shell",
+            "command": "rm",
+            "args": ["-rf", "debug/output/*"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Clean Capture Output",
+            "type": "shell",
+            "command": "rm",
+            "args": ["-rf", "debug/capture/output/*"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Clean All Debug Files",
+            "dependsOrder": "parallel",
+            "dependsOn": [
+                "Clean Debug Output",
+                "Clean Capture Output"
+            ],
+            "group": "build"
+        }
+    ]
+}

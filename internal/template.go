@@ -1,6 +1,8 @@
 package golang
 
-import "embed"
+import (
+	"embed"
+)
 
 //go:embed templates/*
 //go:embed templates/*/*
