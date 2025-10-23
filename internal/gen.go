@@ -260,6 +260,10 @@ func generate(
 			return buf.String()
 		},
 
+		// Nullable type helpers for embed fields
+		"getNullableType":       getNullableType,
+		"getNullableValueField": getNullableValueField,
+
 		// These methods are Go specific, they do not belong in the codegen package
 		// (as that is language independent)
 		"dbarg":               tctx.codegenDbarg,

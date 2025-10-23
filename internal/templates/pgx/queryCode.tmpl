@@ -1,3 +1,45 @@
+{{- /* Helper template: Declare nullable variables for embed fields before Scan */}}
+{{define "declareEmbedNullableVars"}}
+{{- $retName := index . 0}}
+{{- $retStruct := index . 1}}
+{{- $modelsPackage := index . 2}}
+{{- if $retStruct}}
+{{- range $fieldIdx, $field := $retStruct.Fields}}
+{{- if $field.EmbedFields}}
+{{- range $embedIdx, $embed := $field.EmbedFields}}
+	var {{$retName}}{{$field.Name}}{{$embed.Name}} {{getNullableType $embed.Type $modelsPackage}}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- end}}
+
+{{- /* Helper template: Construct embed from nullable fields after successful scan */}}
+{{define "constructEmbedFromNullables"}}
+{{- $retName := index . 0}}
+{{- $retStruct := index . 1}}
+{{- $modelsPackage := index . 2}}
+{{- if $retStruct}}
+{{- range $field := $retStruct.Fields}}
+{{- if $field.EmbedFields}}
+	// Check if {{$field.Name}} embed is null and construct accordingly
+{{- $firstEmbed := index $field.EmbedFields 0}}
+	if {{$retName}}{{$field.Name}}{{$firstEmbed.Name}}.Valid {
+		{{$retName}}.{{$field.Name}} = {{$field.Type}}{
+			{{- range $embed := $field.EmbedFields}}
+			{{- $valueField := getNullableValueField $embed.Type $modelsPackage}}
+			{{$embed.Name}}: {{$retName}}{{$field.Name}}{{$embed.Name}}{{- if ne $valueField ""}}.{{$valueField}}{{- end}},
+			{{- end}}
+		}
+	} else {
+		// Create default {{$field.Name}} with invalid/zero values for all fields
+		{{$retName}}.{{$field.Name}} = {{$field.Type}}{}
+	}
+{{- end}}
+{{- end}}
+{{- end}}
+{{- end}}
+
 {{define "queryCodePgx"}}
 {{$modelsPackage := .OutputModelsPackage}}
 
@@ -40,7 +82,26 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 	{{- if or (ne .Arg.Pair .Ret.Pair) (ne .Arg.DefineType .Ret.DefineType) }}
 	var {{.Ret.Name}} {{.Ret.Type}}
 	{{- end}}
+	{{- /* Declare nullable variables for embed fields before Scan */}}
+	{{- template "declareEmbedNullableVars" (list .Ret.Name .Ret.Struct $modelsPackage)}}
+	{{- if .Ret.Struct}}
+	err := row.Scan(
+		{{- $retName := .Ret.Name}}
+		{{- range $fidx, $field := .Ret.Struct.Fields}}
+		{{- if $field.EmbedFields}}
+		{{- range $eidx, $embed := $field.EmbedFields}}
+		&{{$retName}}{{$field.Name}}{{$embed.Name}},
+		{{- end}}
+		{{- else}}
+		&{{$retName}}.{{$field.Name}},
+		{{- end}}
+		{{- end}}
+	)
+	{{- else}}
 	err := row.Scan({{.Ret.Scan}})
+	{{- end}}
+	{{- /* Construct embed from nullable fields after successful scan */}}
+	{{- template "constructEmbedFromNullables" (list .Ret.Name .Ret.Struct $modelsPackage)}}
 	{{- if .ShouldCallGroupFunction }}
 	if err != nil {
 		{{- if .EmitResultStructPointers}}
@@ -87,9 +148,30 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 	{{end -}}
 	for rows.Next() {
 		var {{.Ret.Name}} {{.Ret.Type}}
+		{{- /* Declare nullable variables for embed fields before Scan */}}
+		{{- template "declareEmbedNullableVars" (list .Ret.Name .Ret.Struct $modelsPackage)}}
+		{{- if .Ret.Struct}}
+		if err := rows.Scan(
+			{{- $retName := .Ret.Name}}
+			{{- range $fidx, $field := .Ret.Struct.Fields}}
+			{{- if $field.EmbedFields}}
+			{{- range $eidx, $embed := $field.EmbedFields}}
+			&{{$retName}}{{$field.Name}}{{$embed.Name}},
+			{{- end}}
+			{{- else}}
+			&{{$retName}}.{{$field.Name}},
+			{{- end}}
+			{{- end}}
+		); err != nil {
+			return nil, err
+		}
+		{{- else}}
 		if err := rows.Scan({{.Ret.Scan}}); err != nil {
 			return nil, err
 		}
+		{{- end}}
+		{{- /* Construct embed from nullable fields after successful scan */}}
+		{{- template "constructEmbedFromNullables" (list .Ret.Name .Ret.Struct $modelsPackage)}}
 		items = append(items, {{.Ret.ReturnName}})
 	}
 	if err := rows.Err(); err != nil {
