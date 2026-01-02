@@ -92,6 +92,7 @@ type Options struct {
 	OutputModelsFileName        string            `json:"output_models_file_name,omitempty" yaml:"output_models_file_name"`
 	OutputModelsPackage         string            `json:"output_models_package,omitempty" yaml:"output_models_package"`
 	ModelsPackageImportPath     string            `json:"models_package_import_path,omitempty" yaml:"models_package_import_path"`
+	SkipModelsGeneration        bool              `json:"skip_models_generation,omitempty" yaml:"skip_models_generation"` // Skip generating models file (use with models_package_import_path)
 	OutputQuerierFileName       string            `json:"output_querier_file_name,omitempty" yaml:"output_querier_file_name"`
 	OutputCopyfromFileName      string            `json:"output_copyfrom_file_name,omitempty" yaml:"output_copyfrom_file_name"`
 	OutputQueryFilesDirectory   string            `json:"output_query_files_directory,omitempty" yaml:"output_query_files_directory"`
@@ -214,6 +215,10 @@ func ValidateOpts(opts *Options) error {
 	}
 	if opts.ModelsPackageImportPath != "" && opts.OutputModelsPackage == "" {
 		return fmt.Errorf("invalid options: output_models_package must be set when models_package_import_path is used")
+	}
+	// When skipping models generation, require models_package_import_path so queries can import models
+	if opts.SkipModelsGeneration && opts.ModelsPackageImportPath == "" {
+		return fmt.Errorf("invalid options: models_package_import_path must be set when skip_models_generation is true")
 	}
 
 	return nil

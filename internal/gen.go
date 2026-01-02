@@ -369,8 +369,12 @@ func generate(
 	if err := execute(dbFileName, options.Package, "dbFile"); err != nil {
 		return nil, err
 	}
-	if err := execute(modelsFileName, modelsPackageName, "modelsFile"); err != nil {
-		return nil, err
+
+	// Skip models generation if flag is set (use with models_package_import_path to import from external package)
+	if !options.SkipModelsGeneration {
+		if err := execute(modelsFileName, modelsPackageName, "modelsFile"); err != nil {
+			return nil, err
+		}
 	}
 	if options.EmitInterface {
 		if err := execute(querierFileName, options.Package, "interfaceFile"); err != nil {
