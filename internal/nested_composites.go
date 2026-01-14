@@ -54,12 +54,16 @@ func (b *NestedCompositesDataBuilder) buildCompositeStructRegistry() error {
 			var nestedFields []string
 			nestedFieldToCompositeNameMap := make(map[string]string)
 			for _, childNestedItem := range composite.Group {
-				// Analyze what nested fields this composite struct will have
+				// Always add StructIn to nestedFields - even ignored items should be excluded from struct fields
+				// The ignore flag only prevents nested struct generation, not field exclusion
 				nestedFields = append(nestedFields, childNestedItem.StructIn)
 
-				// Analyze what nested composites this composite struct will have
-				if childNestedItem.IsComposite != nil && *childNestedItem.IsComposite {
-					nestedFieldToCompositeNameMap[childNestedItem.StructIn] = childNestedItem.StructOut
+				// Only track composite mappings for non-ignored items
+				if !childNestedItem.GetIsIgnore() {
+					// Analyze what nested composites this composite struct will have
+					if childNestedItem.IsComposite != nil && *childNestedItem.IsComposite {
+						nestedFieldToCompositeNameMap[childNestedItem.StructIn] = childNestedItem.StructOut
+					}
 				}
 			}
 
@@ -125,6 +129,8 @@ func (b *NestedCompositesDataBuilder) resolveAllTreeCompositeFields(compositeNam
 }
 
 // getNestedFields gets all nested and composite fields from the nested query config and composites registry
+// Note: Ignored fields are still included in the result because they should be excluded from the struct fields,
+// even though they don't generate nested relationships
 func getNestedFields(config []*opts.NestedGroupConfig) []string {
 	var fields []string
 	for _, nested := range config {
@@ -136,7 +142,8 @@ func getNestedFields(config []*opts.NestedGroupConfig) []string {
 				fields = append(fields, compositeData.EntityFieldsToExclude...)
 			}
 		} else {
-			// Regular nested struct recursively collect fields
+			// Regular nested struct - always include in fields to exclude
+			// Even ignored fields should be excluded from struct fields
 			fields = append(fields, nested.StructIn)
 			if len(nested.Group) > 0 {
 				fields = append(fields, getNestedFields(nested.Group)...)

@@ -24,6 +24,8 @@ type NestedGroupConfig struct {
 	IsSlice      *bool                `json:"slice,omitempty" yaml:"slice"`                   // Whether to use slice (default: true)
 	IsPointer    *bool                `json:"pointer,omitempty" yaml:"pointer"`               // Whether to use pointers (default: true)
 	IsComposite  *bool                `json:"composite,omitempty" yaml:"composite"`           // Whether to reuse existing composite struct that was generated in another query's struct_root (default: false)
+	Ignore       *bool                `json:"ignore,omitempty" yaml:"ignore"`                 // Skip this nested struct entirely - don't generate field or relationship (default: false)
+	EntityType   *string              `json:"entity_type,omitempty" yaml:"entity_type"`       // Maps alias name to actual entity type (e.g., "Image" when struct_in is "Image_2")
 	Group        []*NestedGroupConfig `json:"group,omitempty" yaml:"group"`                   // Nested group configuration (recursive)
 	Match        []*NestedMatchConfig `json:"match,omitempty" yaml:"match"`                   // Match configuration (recursive)
 }
@@ -38,6 +40,19 @@ func (n *NestedGroupConfig) GetIsPointer() bool {
 
 func (n *NestedGroupConfig) GetIsComposite() bool {
 	return n.IsComposite == nil || *n.IsComposite
+}
+
+// GetIsIgnore returns true if this nested struct should be ignored (skipped entirely)
+func (n *NestedGroupConfig) GetIsIgnore() bool {
+	return n.Ignore != nil && *n.Ignore
+}
+
+// GetEntityType returns the entity type to use, or empty string if not specified
+func (n *NestedGroupConfig) GetEntityType() string {
+	if n.EntityType != nil {
+		return *n.EntityType
+	}
+	return ""
 }
 
 // NestedMatchConfig represents the configuration for matching a struct in a nested group

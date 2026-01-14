@@ -71,7 +71,8 @@
   {{- end }}
 {{- end }}
 
-{{- /* Recursive maps initialization */ -}}
+{{- /* Recursive maps initialization - generates map variable declarations */ -}}
+{{- /* Uses StructOut (pluralized) as prefix base for consistent naming with struct definitions */ -}}
 {{define "nestedMapsRecursive"}}
   {{- $parentStruct := index . 0 -}}
   {{- $level := index . 1 -}}
@@ -79,8 +80,10 @@
 
   {{- range $parentStruct.NestedStructs }}
     {{$currentStructMaps := printf "%sMaps" .StructOut | camelCase -}}
-    {{$StructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" .StructIn) .StructOut) -}}
-    {{- $nextPrefix := render "nextMapPrefix" (list . $parentStruct $level $prefix) -}}
+    {{- $entityTypeName := ternary (ne .EntityType "") .EntityType .StructIn -}}
+    {{$StructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" $entityTypeName) .StructOut) -}}
+    {{- /* Use StructOut (pluralized) as prefix base for consistent naming */ -}}
+    {{- $nextPrefix := render "nextMapPrefix" (list . $parentStruct $level $prefix true) -}}
 
     {{- /* Rendered maps definition */ -}}
     {{template "prefixedMapName" (list . $nextPrefix)}} := make(map[string]map[{{.KeyType}}]*{{$StructName}})
@@ -91,13 +94,25 @@
 {{- end -}}
 
 {{- /* Generate next map prefix */ -}}
+{{- /* Parameters: currentStruct, parentStruct, level, prefix, [useStructOutAsPrefix] */ -}}
+{{- /* When useStructOutAsPrefix is true, uses pluralized StructOut instead of FieldName for composite root cases */ -}}
 {{define "nextMapPrefix"}}
   {{- $currentStruct := index . 0 -}}
   {{- $parentStruct := index . 1 -}}
   {{- $level := index . 2 -}}
   {{- $prefix := index . 3 -}}
+  {{- $useStructOutAsPrefix := false -}}
+  {{- if gt (len .) 4 -}}
+    {{- $useStructOutAsPrefix = index . 4 -}}
+  {{- end -}}
   
-  {{- $parentStructPrefix := $parentStruct.FieldName | camelCase -}}
+  {{- /* For composite root cases, use pluralized StructOut; otherwise use FieldName */ -}}
+  {{- $parentStructPrefix := "" -}}
+  {{- if $useStructOutAsPrefix -}}
+    {{- $parentStructPrefix = $parentStruct.StructOut | pluralize | camelCase -}}
+  {{- else -}}
+    {{- $parentStructPrefix = $parentStruct.FieldName | camelCase -}}
+  {{- end -}}
   {{- $nextPrefix := $prefix -}}
   {{- /* Check if StructOut is duplicated at this level to determine if we need a prefix */ -}}
   {{- $isDuplicated := index $currentStruct.DuplicatedRelativeToParents $level -}}
@@ -115,7 +130,8 @@
   {{- $prefix := index . 1 -}}
 
   {{- $structMapItem := $currentStruct.StructOut | camelCase }}
-  {{- $StructName := printf "%s" (ternary $currentStruct.IsEntityStruct (printf "entity.%s" $currentStruct.StructIn) $currentStruct.StructOut) }}
+  {{- $entityTypeName := ternary (ne $currentStruct.EntityType "") $currentStruct.EntityType $currentStruct.StructIn -}}
+  {{- $StructName := printf "%s" (ternary $currentStruct.IsEntityStruct (printf "entity.%s" $entityTypeName) $currentStruct.StructOut) }}
   {{- $structMaps := printf "%sMaps" $structMapItem }}
   {{- $prefixedStuctMaps := $structMaps -}}
   {{- if ne $prefix "" -}}
@@ -127,15 +143,17 @@
 {{- end -}}
 
 {{- /* Recursive maps struct fields definition */ -}}
+{{- /* Uses StructOut (pluralized) as prefix base to ensure consistent naming across composite definitions */ -}}
 {{define "generateDefinePopulateMapsStructFieldsRecursive"}}
   {{- $parentStruct := index . 0 -}}
   {{- $level := index . 1 -}}
   {{- $prefix := index . 2 -}}
-  {{- $parentStructPrefix := $parentStruct.FieldName | camelCase -}}
 
   {{- range $parentStruct.NestedStructs}}
-    {{- $StructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" .StructIn) .StructOut) }}
-    {{- $nextPrefix := render "nextMapPrefix" (list . $parentStruct $level $prefix) -}}
+    {{- $entityTypeName := ternary (ne .EntityType "") .EntityType .StructIn -}}
+    {{- $StructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" $entityTypeName) .StructOut) }}
+    {{- /* Use StructOut (pluralized) as prefix base for consistent naming */ -}}
+    {{- $nextPrefix := render "nextMapPrefix" (list . $parentStruct $level $prefix true) -}}
 
     {{- /* Rendered fields definition */ -}}
     {{template "prefixedMapName" (list . $nextPrefix)}} map[string]map[{{.KeyType}}]*{{$StructName}}
@@ -205,7 +223,16 @@
   // {{$RowGetterInterfaceName}} represents row getter interface for {{$RowStructName}}
   type {{$RowGetterInterfaceName}} interface {
     {{- /* Initialize map to track rendered methods and prevent duplicates */ -}}
-    {{template "generateRowGetterInterfaceMethodsRecursive" (list $currentStruct $query $options dict) }}
+    {{- $renderedMethods := dict -}}
+    {{template "generateRowGetterInterfaceMethodsRecursive" (list $currentStruct $query $options $renderedMethods) }}
+    {{- /* Include methods for match-referenced structs (e.g., Image_2 referenced in match config but marked as ignored) */ -}}
+    {{- range $currentStruct.MatchReferencedStructs -}}
+      {{- $methodSignature := printf "Get%s() %s" .RowFieldName .RowFieldType -}}
+      {{- if not (index $renderedMethods $methodSignature) }}
+        {{$methodSignature}}
+        {{- $_ := set $renderedMethods $methodSignature true -}}
+      {{- end}}
+    {{- end}}
   }
 {{- end}}
 
@@ -242,16 +269,19 @@
   {{- $mapSourceName := index . 5 -}}
 
   {{- range $parentStruct.NestedStructs }}
-    {{- $StructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" .StructIn) .StructOut) }}
+    {{- $entityTypeName := ternary (ne .EntityType "") .EntityType .StructIn -}}
+    {{- $StructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" $entityTypeName) .StructOut) }}
     {{- $structMapItem := .StructOut | camelCase }}
     {{- $structMaps := printf "%sMaps" $structMapItem }}
-    {{- $nextPrefixLeft := render "nextMapPrefix" (list . $parentStruct $leftLevel $prefixLeft) -}}
-    {{- $nextPrefixRight := render "nextMapPrefix" (list . $parentStruct $rightLevel $prefixRight) -}}
+    {{- /* Left side uses StructOut (pluralized) as prefix base to match composite's own definition */ -}}
+    {{- $nextPrefixLeft := render "nextMapPrefix" (list . $parentStruct $leftLevel $prefixLeft true) -}}
+    {{- /* Right side also uses StructOut (pluralized) as maps are declared with same convention */ -}}
+    {{- $nextPrefixRight := render "nextMapPrefix" (list . $parentStruct $rightLevel $prefixRight true) -}}
 
-    {{- /* Left part of the assignment */ -}}
+    {{- /* Left part of the assignment - field name matching target composite's definition */ -}}
     {{- $structMapsAssignmentLeft := render "prefixedMapName" (list . $nextPrefixLeft) -}}
 
-    {{- /* Right part of the assignment */ -}}
+    {{- /* Right part of the assignment - map name from current context */ -}}
     {{- $prefixedStructMaps := render "prefixedMapName" (list . $nextPrefixRight) -}}
     {{- $structMapsAssignmentRight := printf "%s" (ternary (eq $mapSourceName "") $prefixedStructMaps (printf "%s.%s" $mapSourceName $prefixedStructMaps)) -}}
 
@@ -279,6 +309,7 @@
 {{- end}}
 
 {{- /* Recursive grouper function content */ -}}
+{{- /* Uses StructOut (pluralized) as prefix base for consistent map naming */ -}}
 {{define "nestedGrouperRecursiveContent"}}
   {{- $parentStruct := index . 0 -}}
   {{- $level := index . 1 -}}
@@ -296,7 +327,8 @@
     {{- $structFieldGetter := printf "Get%s()" $currentStruct.StructIn }}
     {{- $structFieldResult := $currentStruct.StructIn | camelCase }}
     {{- $PopulateStructName := printf "Populate%sMaps" .StructOut }}
-    {{- $nextPrefix := render "nextMapPrefix" (list . $parentStruct $level $prefix) -}}
+    {{- /* Use StructOut (pluralized) as prefix base for consistent map naming */ -}}
+    {{- $nextPrefix := render "nextMapPrefix" (list . $parentStruct $level $prefix true) -}}
     {{- $prefixedCurrentStructMaps := render "prefixedMapName" (list . $nextPrefix) -}}
 
     // Handle {{.StructOut}} nested relationship
@@ -422,19 +454,21 @@
 {{- /* Recursive mappers functions */ -}}
 {{define "nestedMappersFunctionsRecursive"}}
   {{- $parentStruct := .}}
-  {{- $ParentStructName := printf "%s" (ternary $parentStruct.IsEntityStruct (printf "entity.%s" $parentStruct.StructIn) $parentStruct.StructOut) }}
+  {{- $parentEntityTypeName := ternary (ne $parentStruct.EntityType "") $parentStruct.EntityType $parentStruct.StructIn -}}
+  {{- $ParentStructName := printf "%s" (ternary $parentStruct.IsEntityStruct (printf "entity.%s" $parentEntityTypeName) $parentStruct.StructOut) }}
 
   {{- range .NestedStructs}}
     {{- $currentStruct := .}}
     {{- if and (not .SkipStructGeneration)}}
       {{- if .IsEntityStruct }}
         {{- $functionName := printf "set%sFor%s" .StructOut $parentStruct.StructOut }}
-        {{- $currentStructType := ternary .IsEntityStruct (printf "entity.%s" .StructIn) .StructOut }}
+        {{- $entityTypeName := ternary (ne .EntityType "") .EntityType .StructIn -}}
+        {{- $currentStructType := ternary .IsEntityStruct (printf "entity.%s" $entityTypeName) .StructOut }}
         {{- $currentStructMapItem := $currentStruct.StructOut | camelCase }}
         {{- $currentStructMap := printf "%sMap" $currentStructMapItem }}
         {{- $currentStructInItem := $currentStruct.StructIn | camelCase }}
 
-        {{- $CurrentStructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" .StructIn) .StructOut) }}
+        {{- $CurrentStructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" $entityTypeName) .StructOut) }}
 
         // {{$functionName}} gets or creates a {{.StructOut}} within the {{.StructOut}} structure
         func {{$functionName}}(parent *{{$ParentStructName}}, {{$currentStructMap}} map[{{$currentStruct.KeyType}}]*{{$CurrentStructName}}, {{$currentStructInItem}} *entity.{{.StructIn}}) *{{$CurrentStructName}} {

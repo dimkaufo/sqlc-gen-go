@@ -9,10 +9,10 @@ test: bin/sqlc-gen-go.wasm
 all: bin/sqlc-gen-go bin/sqlc-gen-go.wasm
 
 bin/sqlc-gen-go: bin go.mod go.sum $(wildcard **/*.go)
-	cd plugin && go build -o ../bin/sqlc-gen-go ./main.go
+	cd plugin && GOTOOLCHAIN=local go build -o ../bin/sqlc-gen-go ./main.go
 
 bin/sqlc-gen-go.wasm: bin/sqlc-gen-go
-	cd plugin && GOOS=wasip1 GOARCH=wasm go build -o ../bin/sqlc-gen-go.wasm main.go
+	cd plugin && GOTOOLCHAIN=local GOOS=wasip1 GOARCH=wasm go build -o ../bin/sqlc-gen-go.wasm main.go
 
 bin:
 	mkdir -p bin

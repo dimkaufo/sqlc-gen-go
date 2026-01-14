@@ -246,6 +246,7 @@ func generate(
 		"hasPrefix":  strings.HasPrefix,
 		"trimPrefix": strings.TrimPrefix,
 		"camelCase":  ToCamelCase,
+		"pluralize":  PluralizeCasePreserving, // Pluralize a word while preserving case
 		"ternary":    ternary,
 		"joinTags":   joinTags,
 		"list":       list,

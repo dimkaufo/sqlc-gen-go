@@ -21,6 +21,14 @@ type NestedQueryTemplateData struct {
 	CastToQueryName string // Check if we already have query to reuse
 }
 
+// MatchReferencedStruct represents a struct referenced in a match config that needs a getter method in the interface.
+// This is used when a struct is referenced in a match condition (e.g., Image_2) but is marked as ignored,
+// so it doesn't appear in NestedStructs but still needs a getter method for the match condition to work.
+type MatchReferencedStruct struct {
+	RowFieldName string // Field name in row struct (e.g., "Image_2")
+	RowFieldType string // Field type in row struct (e.g., "entity.Image")
+}
+
 // NestedStructData represents data for a nested structure in the template
 type NestedStructData struct {
 	StructIn                string                    // Input struct name from SQLC
@@ -37,8 +45,14 @@ type NestedStructData struct {
 	IsPointer               bool                      // Whether to use pointers
 	IsComposite             bool                      // Whether this is a composite struct that was already generated
 	IsEntityStruct          bool                      // Whether this is an entity struct that should be reused
+	EntityType              string                    // Actual entity type when StructIn is an alias (e.g., "Image" when StructIn is "Image_2")
 	IsRoot                  bool                      // Whether this is the root of the nested structs
 	Match                   []*opts.NestedMatchConfig // Match configuration
+
+	// MatchReferencedStructs holds structs referenced in match configs that need getter methods in the interface.
+	// These are structs that appear in match conditions (from_struct) but may be marked as ignored,
+	// so they don't appear in NestedStructs but still need getter methods.
+	MatchReferencedStructs []*MatchReferencedStruct
 
 	// Map indicating if this struct's StructOut appears multiple times at each tree level.
 	// Key is the level (1 = immediate parent, 2 = grandparent, etc.)
@@ -295,6 +309,7 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 		FieldTags:               map[string]string{"json": JSONTagName(fieldName, b.options)},
 		Fields:                  fields,
 		IsEntityStruct:          isEntity,
+		EntityType:              config.GetEntityType(), // Actual entity type when struct_in is an alias (e.g., "Image" for "Image_2")
 		IsComposite:             config.GetIsComposite(),
 		IsRowFieldExistsInQuery: b.isRowFieldExistsInQuery(queryName, config),
 		SkipStructGeneration:    skipStructGeneration,
@@ -309,6 +324,12 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 		return nil, err
 	}
 	result.NestedStructs = nestedStructs
+
+	// Collect match-referenced structs from the entire tree (only at root level to avoid duplicates)
+	// These are structs referenced in match configs that need getter methods in the interface
+	if isRootConfig {
+		result.MatchReferencedStructs = b.collectMatchReferencedStructs(queryName, result)
+	}
 
 	// Validate extracted fields only at the root level, since validation is recursive
 	// and will check all nested structures
@@ -404,6 +425,100 @@ func collectAllNestedStructsByStructOut(data *NestedStructData, structOutMap map
 	}
 }
 
+// collectMatchReferencedStructs collects structs referenced in match configs that need getter methods.
+// This traverses the entire nested struct tree and collects unique structs from match configs
+// that are not already in NestedStructs (which already get getter methods).
+func (b *NestedQueryTemplateDataBuilder) collectMatchReferencedStructs(queryName string, root *NestedStructData) []*MatchReferencedStruct {
+	// Collect all RowFieldNames from nested structs (these already have getter methods)
+	existingGetters := make(map[string]bool)
+	collectExistingGettersRecursive(root, existingGetters)
+
+	// Collect all match-referenced structs from the tree
+	matchRefs := make(map[string]*MatchReferencedStruct)
+	b.collectMatchRefsRecursive(queryName, root, matchRefs)
+
+	// Filter out structs that already have getter methods
+	var result []*MatchReferencedStruct
+	for fieldName, ref := range matchRefs {
+		if !existingGetters[fieldName] {
+			result = append(result, ref)
+		}
+	}
+
+	return result
+}
+
+// collectExistingGettersRecursive collects all RowFieldNames from nested structs recursively.
+// These are the structs that already have getter methods in the interface.
+func collectExistingGettersRecursive(data *NestedStructData, existingGetters map[string]bool) {
+	if data == nil {
+		return
+	}
+
+	for _, nestedStruct := range data.NestedStructs {
+		existingGetters[nestedStruct.RowFieldName] = true
+		collectExistingGettersRecursive(nestedStruct, existingGetters)
+	}
+}
+
+// collectMatchRefsRecursive recursively collects structs referenced in match configs.
+func (b *NestedQueryTemplateDataBuilder) collectMatchRefsRecursive(queryName string, data *NestedStructData, matchRefs map[string]*MatchReferencedStruct) {
+	if data == nil {
+		return
+	}
+
+	// Collect from match configs at this level
+	for _, nestedStruct := range data.NestedStructs {
+		for _, match := range nestedStruct.Match {
+			// Add from_struct if specified and exists in query
+			if match.FromStruct != nil && *match.FromStruct != "" {
+				fromStruct := *match.FromStruct
+				if _, exists := matchRefs[fromStruct]; !exists {
+					// Get the actual field type from the query's row struct
+					fieldType := b.getRowFieldTypeByName(queryName, fromStruct)
+					if fieldType != "" {
+						matchRefs[fromStruct] = &MatchReferencedStruct{
+							RowFieldName: fromStruct,
+							RowFieldType: fieldType,
+						}
+					}
+				}
+			}
+
+			// Add to_struct if it exists in query (to_struct is always required)
+			toStruct := match.ToStruct
+			if _, exists := matchRefs[toStruct]; !exists {
+				// Get the actual field type from the query's row struct
+				fieldType := b.getRowFieldTypeByName(queryName, toStruct)
+				if fieldType != "" {
+					matchRefs[toStruct] = &MatchReferencedStruct{
+						RowFieldName: toStruct,
+						RowFieldType: fieldType,
+					}
+				}
+			}
+		}
+
+		// Recurse into nested structs
+		b.collectMatchRefsRecursive(queryName, nestedStruct, matchRefs)
+	}
+}
+
+// getRowFieldTypeByName returns the type of a field by name from the query's row struct.
+// Returns empty string if the field doesn't exist.
+func (b *NestedQueryTemplateDataBuilder) getRowFieldTypeByName(queryName string, fieldName string) string {
+	for _, query := range b.queries {
+		if query.MethodName == queryName {
+			for _, field := range query.Ret.Struct.Fields {
+				if field.Name == fieldName {
+					return field.Type
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // IsCompositeStructAlreadyGenerated checks if the composite struct was already generated
 func (b *NestedQueryTemplateDataBuilder) IsCompositeStructAlreadyGenerated(config *opts.NestedGroupConfig) bool {
 	return config.GetIsComposite() && compositeStructRegistry[config.StructOut].IsStructAlreadyGenerated
@@ -434,6 +549,11 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructsList(queryName string
 	var nestedStructs []*NestedStructData
 
 	for _, nested := range group {
+		// Skip ignored nested structs - they should not be processed at all
+		if nested.GetIsIgnore() {
+			continue
+		}
+
 		// Find the struct fields for the given StructIn
 		var structFields []Field
 		for _, s := range b.structs {
@@ -509,8 +629,15 @@ func (b *NestedQueryTemplateDataBuilder) shouldReuseEntityStruct(structOut, stru
 		return false
 	}
 
+	// Determine which struct name to check in schema
+	// If EntityType is specified (e.g., "Image" for an "Image_2" alias), use that instead of structIn
+	structToCheck := structIn
+	if config.GetEntityType() != "" {
+		structToCheck = config.GetEntityType()
+	}
+
 	// Check if the struct exists in the schema
-	if !b.structExistsInSchema(structIn) {
+	if !b.structExistsInSchema(structToCheck) {
 		return false
 	}
 
@@ -520,7 +647,7 @@ func (b *NestedQueryTemplateDataBuilder) shouldReuseEntityStruct(structOut, stru
 		return false
 	}
 
-	// If structIn exists in schema and has no nesting, reuse the entity struct
+	// If structIn (or its EntityType) exists in schema and has no nesting, reuse the entity struct
 	return true
 }
 
@@ -577,9 +704,16 @@ func (b *NestedQueryTemplateDataBuilder) getFieldType(
 		useEntityPrefix = b.shouldReuseEntityStruct(structOut, structIn, nestedConfig)
 	}
 
+	// Determine the entity type name to use
+	// If EntityType is specified (e.g., "Image" for an "Image_2" alias), use that
+	entityTypeName := structIn
+	if nestedConfig != nil && nestedConfig.GetEntityType() != "" {
+		entityTypeName = nestedConfig.GetEntityType()
+	}
+
 	structType := structOut
 	if useEntityPrefix {
-		structType = fmt.Sprintf("entity.%s", structIn)
+		structType = fmt.Sprintf("entity.%s", entityTypeName)
 	}
 
 	var fieldType string

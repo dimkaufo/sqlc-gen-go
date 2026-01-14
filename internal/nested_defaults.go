@@ -59,6 +59,16 @@ func populateNestedConfigItemWithDefaultValues(config *opts.NestedGroupConfig) e
 	}
 	config.IsPointer = &isPointer
 
+	// Default ignore to false if not specified
+	// Ignored structs are skipped entirely during nested struct generation
+	ignore := false
+	if config.Ignore != nil {
+		ignore = *config.Ignore
+	}
+	config.Ignore = &ignore
+
+	// EntityType doesn't have a default - when nil/empty, we use StructIn as the entity type
+
 	// Default match
 	if config.Match != nil {
 		for _, match := range config.Match {
@@ -72,6 +82,11 @@ func populateNestedConfigItemWithDefaultValues(config *opts.NestedGroupConfig) e
 				match.ToField = &config.FieldGroupBy
 			}
 		}
+	}
+
+	// Recursively populate defaults for nested groups
+	for _, nestedGroup := range config.Group {
+		populateNestedConfigItemWithDefaultValues(nestedGroup)
 	}
 
 	return nil
