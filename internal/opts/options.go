@@ -120,6 +120,7 @@ type Options struct {
 	BuildTags                   string            `json:"build_tags,omitempty" yaml:"build_tags"`
 	Initialisms                 []string          `json:"initialisms,omitempty" yaml:"initialisms"`
 	Nested                      *NestedConfig     `json:"nested,omitempty" yaml:"nested"`
+	EmitWithoutTx               bool              `json:"emit_without_tx,omitempty" yaml:"emit_without_tx"` // When true, skip WithTx method generation (default: false)
 
 	InitialismsMap map[string]struct{} `json:"-" yaml:"-"`
 }

@@ -41,6 +41,7 @@ type tmplCtx struct {
 	EmitMethodsWithDBArgument bool
 	EmitEnumValidMethod       bool
 	EmitAllEnumValues         bool
+	EmitWithoutTx             bool // When true, skip emitting the WithTx method
 	UsesCopyFrom              bool
 	UsesBatch                 bool
 	OmitSqlcVersion           bool
@@ -206,6 +207,7 @@ func generate(
 		EmitMethodsWithDBArgument: options.EmitMethodsWithDbArgument,
 		EmitEnumValidMethod:       options.EmitEnumValidMethod,
 		EmitAllEnumValues:         options.EmitAllEnumValues,
+		EmitWithoutTx:             options.EmitWithoutTx,
 		OutputModelsPackage:       options.OutputModelsPackage,
 		UsesCopyFrom:              usesCopyFrom(queries),
 		UsesBatch:                 usesBatch(queries),

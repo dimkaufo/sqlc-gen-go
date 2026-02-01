@@ -1,6 +1,6 @@
 module github.com/sqlc-dev/sqlc-gen-go
 
-go 1.24.3
+go 1.25.3
 
 require (
 	github.com/fatih/structtag v1.2.0
