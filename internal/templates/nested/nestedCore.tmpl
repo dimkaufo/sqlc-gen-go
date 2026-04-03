@@ -324,7 +324,8 @@
     {{- $currentStructMap := printf "%sMap" $currentStructMapItem }}
     {{- $currentStructMaps := printf "%sMaps" $currentStructMapItem }}
     {{- $currentStructMapsID := printf "%sMapsID" $currentStructMapItem }}
-    {{- $structFieldGetter := printf "Get%s()" $currentStruct.StructIn }}
+    {{- /* Getter must use RowFieldName, not StructIn: sqlc methods are Get<row field>(…) — duplicate embeds differ only in RowFieldName (Company vs Company_2). */ -}}
+    {{- $structFieldGetter := printf "Get%s()" $currentStruct.RowFieldName }}
     {{- $structFieldResult := $currentStruct.StructIn | camelCase }}
     {{- $PopulateStructName := printf "Populate%sMaps" .StructOut }}
     {{- /* Use StructOut (pluralized) as prefix base for consistent map naming */ -}}
@@ -349,9 +350,10 @@
             {{$parentStructMapItem}}.{{.FieldName}} = {{$currentStructMapItem}}
           }          
         {{- end}}
-        
+        {{- /* Nested populate when match rules exist; MatchResolved uses correct row getters for duplicate embeds (Company_2). */ -}}
+        {{- if gt (len .MatchResolved) 0 }}
         shouldPopulate := false
-        {{- range .Match}}
+        {{- range .MatchResolved}}
           if r.Get{{.FromStruct}}().{{.FromField}} == r.Get{{.ToStruct}}().{{.ToField}} {
             shouldPopulate = true
           }
@@ -364,12 +366,13 @@
             row,
           )
         }
+        {{- end -}}
       {{- else }}
         {{if gt (len $currentStruct.NestedStructs) 0 }}{{$currentStructMapItem}} := {{end}}set{{.StructOut}}For{{$parentStruct.StructOut}}({{$parentStructMapItem}}, {{$currentStructMap}}, &{{$structFieldResult}})
         {{- if gt (len $currentStruct.NestedStructs) 0 }}{{- template "nestedGrouperRecursiveContent" (list . (add $level 1) $nextPrefix) }}{{- end}}
       {{- end }}
     }
-  {{- end}}
+  {{ end }}
 {{end}}
 
 {{- /* Generate function to populate composite from entity */ -}}

@@ -29,6 +29,15 @@ type MatchReferencedStruct struct {
 	RowFieldType string // Field type in row struct (e.g., "entity.Image")
 }
 
+// ResolvedMatch holds sqlc row field names for match conditions (Get<Field>() methods).
+// When the same embed appears twice (e.g. Company and Company_2), FromStruct/ToStruct use the suffixed name.
+type ResolvedMatch struct {
+	FromStruct string
+	ToStruct   string
+	FromField  string
+	ToField    string
+}
+
 // NestedStructData represents data for a nested structure in the template
 type NestedStructData struct {
 	StructIn                string                    // Input struct name from SQLC
@@ -48,6 +57,8 @@ type NestedStructData struct {
 	EntityType              string                    // Actual entity type when StructIn is an alias (e.g., "Image" when StructIn is "Image_2")
 	IsRoot                  bool                      // Whether this is the root of the nested structs
 	Match                   []*opts.NestedMatchConfig // Match configuration
+	// MatchResolved is the per-query resolved match (duplicate embeds → Company_2, etc.) for template emission.
+	MatchResolved []ResolvedMatch
 
 	// MatchReferencedStructs holds structs referenced in match configs that need getter methods in the interface.
 	// These are structs that appear in match conditions (from_struct) but may be marked as ignored,
@@ -212,6 +223,7 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedData(query *Query, config *o
 		structFields = query.Ret.Struct.Fields
 	}
 
+	assigner := &structInEmbedAssigner{b: b, query: query.MethodName}
 	nestedStructData, err := b.buildNestedStructData(
 		query.MethodName,
 		&opts.NestedGroupConfig{
@@ -223,6 +235,7 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedData(query *Query, config *o
 		},
 		nil,
 		structFields,
+		assigner,
 	)
 	if err != nil {
 		return NestedQueryTemplateData{}, err
@@ -249,6 +262,7 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 	config *opts.NestedGroupConfig,
 	parent *NestedStructData,
 	structFields []Field,
+	assigner *structInEmbedAssigner,
 ) (*NestedStructData, error) {
 	query := b.getQueryByName(queryName)
 	if query == nil {
@@ -294,6 +308,18 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 		compositeStructRegistry[config.StructOut].IsStructAlreadyGenerated = true
 	}
 
+	// sqlc result struct field name: struct_in, or struct_in_<digits> for duplicate embeds
+	var rowFieldName string
+	if assigner != nil {
+		rowFieldName = assigner.pickRowFieldName(config)
+	} else {
+		rowFieldName = config.StructIn
+	}
+	rowFieldType := fmt.Sprintf("%s.%s", b.options.OutputModelsPackage, config.StructIn)
+	if rft := b.getRowFieldTypeByName(queryName, rowFieldName); rft != "" {
+		rowFieldType = rft
+	}
+
 	// Create the NestedStructData
 	result := &NestedStructData{
 		StructIn:                structIn,
@@ -304,14 +330,14 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 		KeyType:                 determineKeyType(config.FieldGroupBy),
 		FieldName:               fieldName,
 		FieldType:               fieldType,
-		RowFieldName:            config.StructIn,
-		RowFieldType:            fmt.Sprintf("%s.%s", b.options.OutputModelsPackage, config.StructIn),
+		RowFieldName:            rowFieldName,
+		RowFieldType:            rowFieldType,
 		FieldTags:               map[string]string{"json": JSONTagName(fieldName, b.options)},
 		Fields:                  fields,
 		IsEntityStruct:          isEntity,
 		EntityType:              config.GetEntityType(), // Actual entity type when struct_in is an alias (e.g., "Image" for "Image_2")
 		IsComposite:             config.GetIsComposite(),
-		IsRowFieldExistsInQuery: b.isRowFieldExistsInQuery(queryName, config),
+		IsRowFieldExistsInQuery: b.isRowFieldExistsInQueryByName(queryName, rowFieldName),
 		SkipStructGeneration:    skipStructGeneration,
 		IsRoot:                  isRootConfig,
 		Match:                   config.Match,
@@ -319,15 +345,19 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 
 	// Build nested structures recursively (do it after initialization to properly set SkipStructGeneration for children)
 	// So we set SkipStructGeneration from root to leafs (to avoid cases when we skip struct generation for root, but not for children)
-	nestedStructs, err := b.buildNestedStructsList(queryName, result, nestedConfigs)
+	nestedStructs, err := b.buildNestedStructsList(queryName, result, nestedConfigs, assigner)
 	if err != nil {
 		return nil, err
 	}
 	result.NestedStructs = nestedStructs
 
-	// Collect match-referenced structs from the entire tree (only at root level to avoid duplicates)
-	// These are structs referenced in match configs that need getter methods in the interface
-	if isRootConfig {
+	// Resolve match rules to sqlc getter names using qualifying row field names (qualifyingRowFieldNamesForStructIn)
+	b.resolveMatchResolvedForNode(queryName, result)
+
+	// Match-referenced getters (e.g. Image_2 for company avatar while Image_2 is ignore:true) must appear on
+	// every composite RowGetter interface that uses populate* calling r.GetImage_2(), not only the query root.
+	// Root-only collection left RecruiterInfoCompositeRowGetter missing GetImage_2 on connect queries.
+	if config.GetIsComposite() {
 		result.MatchReferencedStructs = b.collectMatchReferencedStructs(queryName, result)
 	}
 
@@ -344,29 +374,6 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 	updateDuplicatesFromNodePerspective(result, []*NestedStructData{})
 
 	return result, nil
-}
-
-func (b *NestedQueryTemplateDataBuilder) getQueryByName(queryName string) *Query {
-	for _, query := range b.queries {
-		if query.MethodName == queryName {
-			return &query
-		}
-	}
-	return nil
-}
-
-// isRowFieldExistsInQuery checks if the row field exists in the query
-func (b *NestedQueryTemplateDataBuilder) isRowFieldExistsInQuery(queryName string, config *opts.NestedGroupConfig) bool {
-	for _, query := range b.queries {
-		if query.MethodName == queryName {
-			for _, field := range query.Ret.Struct.Fields {
-				if field.Name == config.StructIn {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 // updateDuplicatesFromNodePerspective recursively traverses the tree and for each node,
@@ -425,100 +432,6 @@ func collectAllNestedStructsByStructOut(data *NestedStructData, structOutMap map
 	}
 }
 
-// collectMatchReferencedStructs collects structs referenced in match configs that need getter methods.
-// This traverses the entire nested struct tree and collects unique structs from match configs
-// that are not already in NestedStructs (which already get getter methods).
-func (b *NestedQueryTemplateDataBuilder) collectMatchReferencedStructs(queryName string, root *NestedStructData) []*MatchReferencedStruct {
-	// Collect all RowFieldNames from nested structs (these already have getter methods)
-	existingGetters := make(map[string]bool)
-	collectExistingGettersRecursive(root, existingGetters)
-
-	// Collect all match-referenced structs from the tree
-	matchRefs := make(map[string]*MatchReferencedStruct)
-	b.collectMatchRefsRecursive(queryName, root, matchRefs)
-
-	// Filter out structs that already have getter methods
-	var result []*MatchReferencedStruct
-	for fieldName, ref := range matchRefs {
-		if !existingGetters[fieldName] {
-			result = append(result, ref)
-		}
-	}
-
-	return result
-}
-
-// collectExistingGettersRecursive collects all RowFieldNames from nested structs recursively.
-// These are the structs that already have getter methods in the interface.
-func collectExistingGettersRecursive(data *NestedStructData, existingGetters map[string]bool) {
-	if data == nil {
-		return
-	}
-
-	for _, nestedStruct := range data.NestedStructs {
-		existingGetters[nestedStruct.RowFieldName] = true
-		collectExistingGettersRecursive(nestedStruct, existingGetters)
-	}
-}
-
-// collectMatchRefsRecursive recursively collects structs referenced in match configs.
-func (b *NestedQueryTemplateDataBuilder) collectMatchRefsRecursive(queryName string, data *NestedStructData, matchRefs map[string]*MatchReferencedStruct) {
-	if data == nil {
-		return
-	}
-
-	// Collect from match configs at this level
-	for _, nestedStruct := range data.NestedStructs {
-		for _, match := range nestedStruct.Match {
-			// Add from_struct if specified and exists in query
-			if match.FromStruct != nil && *match.FromStruct != "" {
-				fromStruct := *match.FromStruct
-				if _, exists := matchRefs[fromStruct]; !exists {
-					// Get the actual field type from the query's row struct
-					fieldType := b.getRowFieldTypeByName(queryName, fromStruct)
-					if fieldType != "" {
-						matchRefs[fromStruct] = &MatchReferencedStruct{
-							RowFieldName: fromStruct,
-							RowFieldType: fieldType,
-						}
-					}
-				}
-			}
-
-			// Add to_struct if it exists in query (to_struct is always required)
-			toStruct := match.ToStruct
-			if _, exists := matchRefs[toStruct]; !exists {
-				// Get the actual field type from the query's row struct
-				fieldType := b.getRowFieldTypeByName(queryName, toStruct)
-				if fieldType != "" {
-					matchRefs[toStruct] = &MatchReferencedStruct{
-						RowFieldName: toStruct,
-						RowFieldType: fieldType,
-					}
-				}
-			}
-		}
-
-		// Recurse into nested structs
-		b.collectMatchRefsRecursive(queryName, nestedStruct, matchRefs)
-	}
-}
-
-// getRowFieldTypeByName returns the type of a field by name from the query's row struct.
-// Returns empty string if the field doesn't exist.
-func (b *NestedQueryTemplateDataBuilder) getRowFieldTypeByName(queryName string, fieldName string) string {
-	for _, query := range b.queries {
-		if query.MethodName == queryName {
-			for _, field := range query.Ret.Struct.Fields {
-				if field.Name == fieldName {
-					return field.Type
-				}
-			}
-		}
-	}
-	return ""
-}
-
 // IsCompositeStructAlreadyGenerated checks if the composite struct was already generated
 func (b *NestedQueryTemplateDataBuilder) IsCompositeStructAlreadyGenerated(config *opts.NestedGroupConfig) bool {
 	return config.GetIsComposite() && compositeStructRegistry[config.StructOut].IsStructAlreadyGenerated
@@ -545,7 +458,12 @@ func (b *NestedQueryTemplateDataBuilder) IsCompositeStructWillBeGeneratedInAnoth
 }
 
 // buildNestedStructsList builds a list of nested struct data from a group configuration
-func (b *NestedQueryTemplateDataBuilder) buildNestedStructsList(queryName string, parent *NestedStructData, group []*opts.NestedGroupConfig) ([]*NestedStructData, error) {
+func (b *NestedQueryTemplateDataBuilder) buildNestedStructsList(
+	queryName string,
+	parent *NestedStructData,
+	group []*opts.NestedGroupConfig,
+	assigner *structInEmbedAssigner,
+) ([]*NestedStructData, error) {
 	var nestedStructs []*NestedStructData
 
 	for _, nested := range group {
@@ -563,7 +481,7 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructsList(queryName string
 			}
 		}
 
-		nestedData, err := b.buildNestedStructData(queryName, nested, parent, structFields)
+		nestedData, err := b.buildNestedStructData(queryName, nested, parent, structFields, assigner)
 		if err != nil {
 			return nil, err
 		}
@@ -663,9 +581,11 @@ func (b *NestedQueryTemplateDataBuilder) structExistsInSchema(structName string)
 
 // getCurrentStructFields extracts nested fields from the struct fields
 func (b *NestedQueryTemplateDataBuilder) getNonNestedStructFields(fields []Field, groupConfig []*opts.NestedGroupConfig) []Field {
+	excluded := getNestedFields(groupConfig)
+	excluded = appendDuplicateSqlcEmbedExclusions(fields, excluded)
 	return b.extractFields(
 		fields,
-		getNestedFields(groupConfig),
+		excluded,
 		"",
 	)
 }

@@ -30,6 +30,14 @@ type CompositeStructData struct {
 
 	// Whether the struct is already generated
 	IsStructAlreadyGenerated bool
+
+	// RowGetterFieldNamesForPopulateRow lists sqlc row field names (StructIn / base embed names)
+	// that populate{Composite}(..., row) and {Composite}RowGetter require in the canonical query
+	// without duplicate embeds — e.g. RecruitersCompanyComposite needs Company and Image for
+	// GetCompany()/GetImage(). Parent queries with duplicate Image embeds may resolve the company
+	// logo to Image_2 in the nested tree while the shared RowGetter constraint still uses GetImage();
+	// collectMatchReferencedStructs merges these canonical names into the parent interface.
+	RowGetterFieldNamesForPopulateRow []string
 }
 
 type NestedCompositesDataBuilder struct {
@@ -84,9 +92,47 @@ func (b *NestedCompositesDataBuilder) buildCompositeStructRegistry() error {
 			}
 			compositeStruct.EntityFieldsToExclude = fields
 		}
+
+		// Pass 3: Canonical row field names (struct_in order) for each composite's RowGetter used by
+		// populate*(..., row). Independent of per-query duplicate-embed resolution (Image vs Image_2).
+		for _, composite := range compositesConfigItems {
+			compositeStruct, exists := compositeStructRegistry[composite.Name]
+			if !exists {
+				continue
+			}
+			compositeStruct.RowGetterFieldNamesForPopulateRow = collectRowGetterFieldNamesFromRegistryConfig(compositeStruct)
+		}
 	}
 
 	return nil
+}
+
+// collectRowGetterFieldNamesFromRegistryConfig walks nested.composites group DFS (same shape as
+// generateRowGetterInterfaceMethodsRecursive) and collects struct_in names for entity row getters.
+// Composite children contribute their struct_in before recursing into the referenced composite.
+func collectRowGetterFieldNamesFromRegistryConfig(reg *CompositeStructData) []string {
+	if reg == nil || reg.Config == nil {
+		return nil
+	}
+	var out []string
+	var walk func([]*opts.NestedGroupConfig)
+	walk = func(groups []*opts.NestedGroupConfig) {
+		for _, g := range groups {
+			if g.GetIsIgnore() {
+				continue
+			}
+			if g.GetIsComposite() {
+				out = append(out, g.StructIn)
+				if child, ok := compositeStructRegistry[g.StructOut]; ok && child.Config != nil {
+					walk(child.Config.Group)
+				}
+				continue
+			}
+			out = append(out, g.StructIn)
+		}
+	}
+	walk(reg.Config.Group)
+	return out
 }
 
 // registerCompositeStructData registers a composite struct data in the composites registry
