@@ -576,8 +576,14 @@
                 {{- template "nestedMapsRecursive" (list . 1 "") }}
 
                 {{/* Declare nested structs mapper */}}
+                // result preserves first-seen (query ORDER BY) order; ranging the map below would be non-deterministic.
+                var result []{{$ptr}}{{$RootStructName}}
                 for _, row := range rows {
+                  {{$rootStructMapItem}}LenBefore := len({{$rootStructMap}})
                   {{$rootStructMapItem}} := getOrCreate{{$RootStructName}}({{$rootStructMap}}, row)
+                  if len({{$rootStructMap}}) > {{$rootStructMapItem}}LenBefore {
+                    result = append(result, {{$oppositePtr}}{{$rootStructMapItem}})
+                  }
                 populate{{$RootStructName}}(
                   {{$rootStructMapItem}},
                   &{{- template "generateInitPopulateMapsStruct" (list . 1 1 "" "" "") -}},
@@ -585,11 +591,6 @@
                 )
                 }
                 
-                var result []{{$ptr}}{{$RootStructName}}
-                for _, {{$rootStructMapItem}} := range {{$rootStructMap}} {
-                  result = append(result, {{$oppositePtr}}{{$rootStructMapItem}})
-                }
-
                 return result
               }
 
