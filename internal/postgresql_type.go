@@ -39,6 +39,10 @@ func postgresType(req *plugin.GenerateRequest, options *opts.Options, col *plugi
 	notNull := col.NotNull || col.IsArray
 	driver := parseDriver(options.SqlPackage)
 	emitPointersForNull := driver.IsPGX() && options.EmitPointersForNullTypes
+	emitPointersForNullEnums := emitPointersForNull
+	if options.EmitPointersForNullEnumTypes != nil {
+		emitPointersForNullEnums = driver.IsPGX() && *options.EmitPointersForNullEnumTypes
+	}
 
 	switch columnType {
 	case "serial", "serial4", "pg_catalog.serial4":
@@ -165,7 +169,7 @@ func postgresType(req *plugin.GenerateRequest, options *opts.Options, col *plugi
 		}
 		return "sql.NullBool"
 
-	case "json":
+	case "json", "pg_catalog.json":
 		switch driver {
 		case opts.SQLDriverPGXV5:
 			return "[]byte"
@@ -181,7 +185,7 @@ func postgresType(req *plugin.GenerateRequest, options *opts.Options, col *plugi
 			return "interface{}"
 		}
 
-	case "jsonb":
+	case "jsonb", "pg_catalog.jsonb":
 		switch driver {
 		case opts.SQLDriverPGXV5:
 			return "[]byte"
@@ -233,7 +237,7 @@ func postgresType(req *plugin.GenerateRequest, options *opts.Options, col *plugi
 		}
 		return "sql.NullTime"
 
-	case "pg_catalog.timestamp":
+	case "pg_catalog.timestamp", "timestamp":
 		if driver == opts.SQLDriverPGXV5 {
 			return "pgtype.Timestamp"
 		}
@@ -503,6 +507,11 @@ func postgresType(req *plugin.GenerateRequest, options *opts.Options, col *plugi
 			return "pgtype.XID"
 		}
 
+	case "xid8":
+		if driver == opts.SQLDriverPGXV5 {
+			return "pgtype.Uint64"
+		}
+
 	case "box":
 		if driver.IsPGX() {
 			return "pgtype.Box"
@@ -580,12 +589,27 @@ func postgresType(req *plugin.GenerateRequest, options *opts.Options, col *plugi
 						}
 
 					} else {
+						// Upstream can emit *Enum (pointer) instead of NullEnum when
+						// emit_pointers_for_null_(enum_)types is set. The "*" must sit OUTSIDE
+						// the models-package qualifier (*pkg.Enum), whereas "Null" is part of
+						// the generated null-wrapper type name and stays inside (pkg.NullEnum).
+						if emitPointersForNullEnums {
+							var baseName string
+							if schema.Name == req.Catalog.DefaultSchema {
+								baseName = StructName(enum.Name, options)
+							} else {
+								baseName = StructName(schema.Name+"_"+enum.Name, options)
+							}
+							if options.ModelsPackageImportPath != "" {
+								return "*" + options.OutputModelsPackage + "." + baseName
+							}
+							return "*" + baseName
+						}
 						if schema.Name == req.Catalog.DefaultSchema {
 							enumName = "Null" + StructName(enum.Name, options)
 						} else {
 							enumName = "Null" + StructName(schema.Name+"_"+enum.Name, options)
 						}
-
 					}
 					if options.ModelsPackageImportPath != "" {
 						return options.OutputModelsPackage + "." + enumName

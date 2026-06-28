@@ -100,6 +100,11 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 	{{- else}}
 	err := row.Scan({{.Ret.Scan}})
 	{{- end}}
+	{{- if $.WrapErrors}}
+	if err != nil {
+		err = fmt.Errorf("query {{.MethodName}}: %w", err)
+	}
+	{{- end}}
 	{{- /* Construct embed from nullable fields after successful scan */}}
 	{{- template "constructEmbedFromNullables" (list .Ret.Name .Ret.Struct $modelsPackage)}}
 	{{- if .ShouldCallGroupFunction }}
@@ -138,7 +143,7 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 	rows, err := q.db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- end}}
 	if err != nil {
-		return nil, err
+		return nil, {{if $.WrapErrors}}fmt.Errorf("query {{.MethodName}}: %w", err){{else}}err{{end}}
 	}
 	defer rows.Close()
 	{{- if $.EmitEmptySlices}}
@@ -167,7 +172,7 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 		}
 		{{- else}}
 		if err := rows.Scan({{.Ret.Scan}}); err != nil {
-			return nil, err
+			return nil, {{if $.WrapErrors}}fmt.Errorf("query {{.MethodName}}: %w", err){{else}}err{{end}}
 		}
 		{{- end}}
 		{{- /* Construct embed from nullable fields after successful scan */}}
@@ -175,7 +180,7 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 		items = append(items, {{.Ret.ReturnName}})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, {{if $.WrapErrors}}fmt.Errorf("query {{.MethodName}}: %w", err){{else}}err{{end}}
 	}
 	{{- if .ShouldCallGroupFunction }}
 	return {{.GroupFunctionName}}(items), nil
@@ -195,7 +200,14 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) e
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) error {
 	_, err := q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- end}}
+	{{- if $.WrapErrors }}
+	if err != nil {
+		return fmt.Errorf("query {{.MethodName}}: %w", err)
+	}
+	return nil
+	{{- else }}
 	return err
+	{{- end }}
 }
 {{end}}
 
@@ -210,7 +222,7 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) (int64, er
 	result, err := q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- end}}
 	if err != nil {
-		return 0, err
+		return 0, {{if $.WrapErrors}}fmt.Errorf("query {{.MethodName}}: %w", err){{else}}err{{end}}
 	}
 	return result.RowsAffected(), nil
 }
@@ -221,11 +233,17 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) (int64, er
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) (pgconn.CommandTag, error) {
-	return db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	{{queryRetval .}} db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) (pgconn.CommandTag, error) {
-	return q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	{{queryRetval .}} q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
 {{- end}}
+	{{- if $.WrapErrors}}
+	if err != nil {
+		err = fmt.Errorf("query {{.MethodName}}: %w", err)
+	}
+	return result, err
+	{{- end}}
 }
 {{end}}
 

@@ -47,6 +47,7 @@ type tmplCtx struct {
 	OmitSqlcVersion           bool
 	BuildTags                 string
 	OutputModelsPackage       string
+	WrapErrors                bool
 }
 
 func (t *tmplCtx) OutputQuery(sourceName string) bool {
@@ -104,6 +105,9 @@ func (t *tmplCtx) codegenQueryRetval(q Query) (string, error) {
 	case ":execrows", ":execlastid":
 		return "result, err :=", nil
 	case ":execresult":
+		if t.WrapErrors {
+			return "result, err :=", nil
+		}
 		return "return", nil
 	default:
 		return "", fmt.Errorf("unhandled q.Cmd case %q", q.Cmd)
@@ -220,6 +224,7 @@ func generate(
 		SqlcVersion:               req.SqlcVersion,
 		BuildTags:                 options.BuildTags,
 		OmitSqlcVersion:           options.OmitSqlcVersion,
+		WrapErrors:                options.WrapErrors,
 	}
 
 	if tctx.UsesCopyFrom && !tctx.SQLDriver.IsPGX() && options.SqlDriver != opts.SQLDriverGoSQLDriverMySQL {
@@ -568,7 +573,7 @@ func filterUnusedStructs(options *opts.Options, enums []Enum, structs []Struct, 
 			keepTypes[query.Ret.Type()] = struct{}{}
 			if query.Ret.IsStruct() {
 				for _, field := range query.Ret.Struct.Fields {
-					keepTypes[field.Type] = struct{}{}
+					keepTypes[strings.TrimPrefix(field.Type, "[]")] = struct{}{}
 					for _, embedField := range field.EmbedFields {
 						keepTypes[embedField.Type] = struct{}{}
 					}
@@ -588,7 +593,8 @@ func filterUnusedStructs(options *opts.Options, enums []Enum, structs []Struct, 
 
 		_, keep := keepTypes[enumType]
 		_, keepNull := keepTypes["Null"+enumType]
-		if keep || keepNull {
+		_, keepPointer := keepTypes["*"+enumType]
+		if keep || keepNull || keepPointer {
 			keepEnums = append(keepEnums, enum)
 		}
 	}
