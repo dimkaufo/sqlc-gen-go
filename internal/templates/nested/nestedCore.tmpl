@@ -340,10 +340,16 @@
 
       {{ if $currentStruct.IsComposite }}
         // For composite structs we populate the entity afterwards
+        {{- if .IsSlice}}
+        {{$currentStructMapItem}}LenBefore := len({{$currentStructMap}})
+        {{- end}}
         {{$currentStructMapItem}} := getOrCreate{{.StructOut}}From{{$currentStruct.StructIn}}({{$currentStructMap}}, &{{$structFieldResult}})
         {{ if .IsSlice}}
-          // Update parent
-          {{$parentStructMapItem}}.{{.FieldName}} = append({{$parentStructMapItem}}.{{.FieldName}}, {{$currentStructMapItem}})
+          // Update parent only when created: getOrCreate returns the existing pointer on a hit, and a
+          // parent repeated across another collection's rows would append that pointer again.
+          if len({{$currentStructMap}}) > {{$currentStructMapItem}}LenBefore {
+            {{$parentStructMapItem}}.{{.FieldName}} = append({{$parentStructMapItem}}.{{.FieldName}}, {{$currentStructMapItem}})
+          }
         {{ else}}
           // Update parent
           if {{$parentStructMapItem}}.{{.FieldName}} == nil || {{$parentStructMapItem}}.{{.FieldName}}.{{$currentStruct.FieldGroupBy}} != {{$currentStructMapItem}}.{{$currentStruct.FieldGroupBy}} {
