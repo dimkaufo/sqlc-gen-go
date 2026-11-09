@@ -458,6 +458,21 @@ func (i *importer) queryImports(filename string) fileImports {
 		std["fmt"] = struct{}{}
 	}
 
+	// Grouped :one returns pgx.ErrNoRows / a fmt error itself (see pgx queryCode.tmpl).
+	if sqlpkg.IsPGX() {
+		for _, q := range gq {
+			if q.Cmd == metadata.CmdOne && q.ShouldCallGroupFunction() {
+				std["fmt"] = struct{}{}
+				if sqlpkg == opts.SQLDriverPGXV4 {
+					pkg[ImportSpec{Path: "github.com/jackc/pgx/v4"}] = struct{}{}
+				} else {
+					pkg[ImportSpec{Path: "github.com/jackc/pgx/v5"}] = struct{}{}
+				}
+				break
+			}
+		}
+	}
+
 	return sortedImports(std, pkg)
 }
 
