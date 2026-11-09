@@ -131,6 +131,30 @@ func (ns Null{{.Name}}) Value() (driver.Value, error) {
 	return string(ns.{{.Name}}), nil
 }
 
+{{ if $.EmitNullEnumHelpers }}
+// ToNull{{.Name}}FromRef maps an optional value onto Null{{.Name}}; nil is NULL.
+func ToNull{{.Name}}FromRef[T ~string](v *T) Null{{.Name}} {
+	if v == nil {
+		return Null{{.Name}}{}
+	}
+	return Null{{.Name}}{ {{- .Name}}: {{.Name}}(*v), Valid: true}
+}
+
+// ToNull{{.Name}}FromValue maps a value onto a valid Null{{.Name}}.
+func ToNull{{.Name}}FromValue[T ~string](v T) Null{{.Name}} {
+	return Null{{.Name}}{ {{- .Name}}: {{.Name}}(v), Valid: true}
+}
+
+// FromNull{{.Name}}ToRef maps Null{{.Name}} onto an optional value; NULL is nil.
+func FromNull{{.Name}}ToRef[T ~string](ns Null{{.Name}}) *T {
+	if !ns.Valid {
+		return nil
+	}
+	v := T(ns.{{.Name}})
+	return &v
+}
+{{ end }}
+
 
 {{ if $.EmitEnumValidMethod }}
 func (e {{.Name}}) Valid() bool {

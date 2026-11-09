@@ -96,6 +96,7 @@ type Options struct {
 	EmitPointersForNullEnumTypes *bool             `json:"emit_pointers_for_null_enum_types,omitempty" yaml:"emit_pointers_for_null_enum_types"`
 	EmitEnumValidMethod          bool              `json:"emit_enum_valid_method,omitempty" yaml:"emit_enum_valid_method"`
 	EmitAllEnumValues            bool              `json:"emit_all_enum_values,omitempty" yaml:"emit_all_enum_values"`
+	EmitNullEnumHelpers          bool              `json:"emit_null_enum_helpers,omitempty" yaml:"emit_null_enum_helpers"` // ToNull<Enum>FromRef/FromValue + FromNull<Enum>ToRef, generic over ~string
 	EmitSqlAsComment             bool              `json:"emit_sql_as_comment,omitempty" yaml:"emit_sql_as_comment"`
 	JsonTagsCaseStyle            string            `json:"json_tags_case_style,omitempty" yaml:"json_tags_case_style"`
 	Package                      string            `json:"package" yaml:"package"`
