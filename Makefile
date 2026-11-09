@@ -1,4 +1,4 @@
-.PHONY: build test
+.PHONY: build test release
 
 build:
 	go build ./...
@@ -17,3 +17,7 @@ bin/sqlc-gen-go.wasm: bin/sqlc-gen-go
 
 bin:
 	mkdir -p bin
+
+# Tag + build + publish the WASM release (interactive; VERSION=vX.Y.Z[-rc.N], DRY_RUN=1).
+release:
+	@VERSION="$(VERSION)" DRY_RUN="$(DRY_RUN)" ./scripts/release.sh
