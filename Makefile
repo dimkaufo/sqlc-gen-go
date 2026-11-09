@@ -18,6 +18,6 @@ bin/sqlc-gen-go.wasm: bin/sqlc-gen-go
 bin:
 	mkdir -p bin
 
-# Tag + build + publish the WASM release (interactive; VERSION=vX.Y.Z[-rc.N], DRY_RUN=1).
+# Build the WASM release and print the steps to publish it (interactive; VERSION=vX.Y.Z[-rc.N]).
 release:
-	@VERSION="$(VERSION)" DRY_RUN="$(DRY_RUN)" ./scripts/release.sh
+	@VERSION="$(VERSION)" ./scripts/release.sh
