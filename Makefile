@@ -1,10 +1,15 @@
-.PHONY: build test release
+.PHONY: build test test.update release
 
 build:
 	go build ./...
 
 test: bin/sqlc-gen-go.wasm
 	go test ./...
+	cd internal/endtoend && go test ./...
+
+# Regenerate the nested end-to-end case's checked-in output after an intended generator change.
+test.update:
+	cd internal/endtoend && go test -run TestNestedGenerate . -update
 
 all: bin/sqlc-gen-go bin/sqlc-gen-go.wasm
 

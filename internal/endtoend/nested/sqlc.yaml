@@ -1,0 +1,235 @@
+# Nested-generator end-to-end case. Plugin is the freshly built native binary on PATH
+# (nested_test.go builds it); no database — sqlc analyses schema.sql.
+version: "2"
+plugins:
+  - name: golang
+    process:
+      cmd: sqlc-gen-go
+sql:
+  - engine: postgresql
+    schema: schema.sql
+    queries: query
+    codegen:
+      - plugin: golang
+        out: gen
+        options:
+          package: query
+          output_query_files_directory: query
+          output_db_file_name: query/queries.gen.go
+          output_files_suffix: .gen
+          output_models_file_name: entity/model.gen.go
+          output_models_package: entity
+          models_package_import_path: github.com/sqlc-dev/sqlc-gen-go/internal/endtoend/nested/gen/entity
+          sql_package: pgx/v5
+          emit_result_struct_pointers: true
+          emit_params_struct_pointers: true
+          emit_without_tx: true
+          nested:
+            composites:
+              - name: UserComposite
+                struct_root_in: User
+                group:
+                  - struct_in: Image
+                    field_out: Avatar
+                    slice: false
+
+              - name: RecruiterInfoComposite
+                struct_root_in: RecruiterAccount
+                group:
+                  - struct_in: User
+                    slice: false
+                  - struct_in: Image
+                    field_out: Avatar
+                    slice: false
+                  - struct_in: Account
+                    slice: false
+
+              - name: JobseekerInfoComposite
+                struct_root_in: JobseekerAccount
+                group:
+                  - struct_in: User
+                    slice: false
+                  - struct_in: Image
+                    field_out: Avatar
+                    slice: false
+                  - struct_in: Account
+                    slice: false
+
+              - name: CompanyComposite
+                struct_root_in: Company
+                group:
+                  - struct_in: Image
+                    field_out: Avatar
+                    slice: false
+
+              - name: VacancySkillComposite
+                struct_root_in: VacancySkill
+                group:
+                  - struct_in: Skill
+                    slice: false
+
+              - name: VacancyComposite
+                struct_root_in: Vacancy
+                group:
+                  - struct_in: RecruiterAccount
+                    struct_out: RecruiterInfoComposite
+                    field_out: Author
+                    composite: true
+                    slice: false
+                    match:
+                      - from_struct: Image
+                        from_field: ID
+                        to_struct: User
+                        to_field: AvatarID
+                  - struct_in: Company
+                    struct_out: CompanyComposite
+                    composite: true
+                    slice: false
+                    match:
+                      - from_struct: Image_2
+                        from_field: ID
+                        to_struct: Company
+                        to_field: AvatarID
+                  - struct_in: Image_2
+                    ignore: true
+                  - struct_in: VacancySkill
+                    struct_out: VacancySkillComposite
+                    composite: true
+                    field_out: Skills
+                    match:
+                      - from_struct: Skill
+                        from_field: ID
+                        to_struct: VacancySkill
+                        to_field: SkillID
+
+              - name: ChatMemberComposite
+                struct_root_in: ChatMember
+                group:
+                  - struct_in: Account
+                    slice: false
+                  - struct_in: User
+                    slice: false
+                  - struct_in: Image
+                    field_out: Avatar
+                    slice: false
+
+              - name: ChatComposite
+                struct_root_in: Chat
+                group:
+                  - struct_in: ChatMember
+                    struct_out: ChatMemberComposite
+                    composite: true
+                    match:
+                      - from_field: AccountID
+                        to_struct: Account
+                        to_field: ID
+
+              - name: ConnectComposite
+                struct_root_in: Connect
+                group:
+                  - struct_in: Vacancy
+                    slice: false
+                  - struct_in: JobseekerAccount
+                    struct_out: JobseekerInfoComposite
+                    composite: true
+                    slice: false
+                    match:
+                      - to_struct: Account
+                  - struct_in: RecruiterAccount
+                    struct_out: RecruiterInfoComposite
+                    composite: true
+                    slice: false
+                    match:
+                      - to_struct: Account
+                  - struct_in: Chat
+                    struct_out: ChatComposite
+                    composite: true
+                    match:
+                      - from_struct: ChatMember
+                        from_field: AccountID
+                        to_struct: Account
+                  - struct_in: Offer
+                  - struct_in: Feedback
+
+              - name: ConnectParticipantsComposite
+                struct_root_in: Connect
+                group:
+                  - struct_in: RecruiterAccount
+                    struct_out: RecruiterInfoComposite
+                    field_out: Recruiter
+                    composite: true
+                    slice: false
+                    match:
+                      - to_struct: Account
+                  - struct_in: RecruiterAccount
+                    struct_out: RecruiterInfoComposite
+                    field_out: Interviewer
+                    composite: true
+                    slice: false
+                    match:
+                      - to_struct: Account
+                  - struct_in: Offer
+
+              - name: ConnectChatsComposite
+                struct_root_in: Connect
+                group:
+                  - struct_in: Chat
+                    struct_out: ChatComposite
+                    field_out: GeneralChat
+                    composite: true
+                    slice: false
+                    match:
+                      - from_struct: ChatMember
+                        from_field: AccountID
+                        to_struct: Account
+                  - struct_in: Chat
+                    struct_out: ChatComposite
+                    field_out: PrivateChat
+                    composite: true
+                    slice: false
+                    match:
+                      - from_struct: ChatMember
+                        from_field: AccountID
+                        to_struct: Account
+
+            queries:
+              - query: GetUserByID
+                struct_root: UserComposite
+                composite: true
+              - query: ListUsers
+                struct_root: UserComposite
+                composite: true
+              - query: GetCompanyByID
+                struct_root: CompanyComposite
+                composite: true
+              - query: GetChatsByConnectID
+                struct_root: ChatComposite
+                composite: true
+              - query: GetVacancyByID
+                struct_root: VacancyComposite
+                composite: true
+              - query: GetConnectByID
+                struct_root: ConnectComposite
+                composite: true
+              - query: ListVacancyLogos
+                struct_root: VacancyLogo
+                field_group_by: CompanyID
+                group:
+                  - struct_in: Company
+                    slice: false
+                    pointer: false
+                  - struct_in: Image
+                    field_out: Logo
+                    slice: false
+                  - struct_in: Image_2
+                    entity_type: Image
+                    field_out: AuthorAvatar
+                    slice: false
+                  - struct_in: Skill
+                    pointer: false
+              - query: GetConnectChatsByID
+                struct_root: ConnectChatsComposite
+                composite: true
+              - query: GetConnectParticipantsByID
+                struct_root: ConnectParticipantsComposite
+                composite: true

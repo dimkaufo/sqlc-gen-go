@@ -72,6 +72,16 @@ type NestedStructData struct {
 	// For example: RecruitersCompanyComposite at level 1 (direct child) and level 2 (grandchild).
 	DuplicatedRelativeToParents map[int]bool
 
+	// SiblingDuplicate: another child of the same parent has this StructOut (recruiter and
+	// interviewer both RecruiterInfoComposite). The parent-based map prefix alone would collide,
+	// so the field name joins it.
+	SiblingDuplicate bool
+
+	// InlinePopulate: this composite occurrence reads other row fields than the occurrence that
+	// emitted the shared populate{StructOut} (Image_2 instead of Image), so its call site groups
+	// inline with its own getters instead of calling that function.
+	InlinePopulate bool
+
 	Fields        []Field             // Non-nested fields
 	NestedStructs []*NestedStructData // Nested structures data of the current struct
 
@@ -123,7 +133,83 @@ func populateNestedDataItems(
 		nested[i].NestedDataItems = nestedDataItem
 	}
 
+	markInlinePopulate(nested)
+	renameNumberedEmbeds(nested)
+
 	return nested, nil
+}
+
+// markInlinePopulate flags composite occurrences whose populate body would read other row
+// fields than the one shared populate{StructOut} function, which is emitted once — from the
+// query root of that composite, else from its first non-skipped nested occurrence.
+func markInlinePopulate(nested []Nested) {
+	canonical := make(map[string]string)
+	emit := func(n *NestedStructData) {
+		if _, ok := canonical[n.StructOut]; !ok {
+			canonical[n.StructOut] = populateBodySignature(n)
+		}
+	}
+	forEachNestedRoot(nested, func(root *NestedStructData) {
+		if !root.SkipStructGeneration {
+			emit(root)
+		}
+		walkNestedStructs(root, func(n *NestedStructData) {
+			if n.IsComposite && !n.IsRoot && !n.SkipStructGeneration {
+				emit(n)
+			}
+		})
+	})
+	forEachNestedRoot(nested, func(root *NestedStructData) {
+		walkNestedStructs(root, func(n *NestedStructData) {
+			if !n.IsComposite || n.IsRoot {
+				return
+			}
+			if sig, ok := canonical[n.StructOut]; ok && sig != populateBodySignature(n) {
+				n.InlinePopulate = true
+			}
+		})
+	})
+}
+
+func forEachNestedRoot(nested []Nested, fn func(*NestedStructData)) {
+	for i := range nested {
+		for j := range nested[i].NestedDataItems {
+			if root := nested[i].NestedDataItems[j].RootStructData; root != nil {
+				fn(root)
+			}
+		}
+	}
+}
+
+// walkNestedStructs visits every descendant of node, depth first.
+func walkNestedStructs(node *NestedStructData, fn func(*NestedStructData)) {
+	for _, ch := range node.NestedStructs {
+		fn(ch)
+		walkNestedStructs(ch, fn)
+	}
+}
+
+// populateBodySignature is what a populate body for node reads off the row: each descendant's
+// row getter and match getters, in emission order. A composite child without a match is never
+// populated, so its subtree is not read.
+func populateBodySignature(node *NestedStructData) string {
+	var b strings.Builder
+	var walk func(*NestedStructData)
+	walk = func(p *NestedStructData) {
+		for _, ch := range p.NestedStructs {
+			fmt.Fprintf(&b, "%s:%s[", ch.FieldName, ch.RowFieldName)
+			for _, m := range ch.MatchResolved {
+				fmt.Fprintf(&b, "%s.%s=%s.%s,", m.FromStruct, m.FromField, m.ToStruct, m.ToField)
+			}
+			b.WriteString("](")
+			if !ch.IsComposite || len(ch.MatchResolved) > 0 {
+				walk(ch)
+			}
+			b.WriteString(")")
+		}
+	}
+	walk(node)
+	return b.String()
 }
 
 func (b *NestedQueryTemplateDataBuilder) buildNestedDataItems(
@@ -223,6 +309,12 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedData(query *Query, config *o
 		structFields = query.Ret.Struct.Fields
 	}
 
+	// A struct_root missing from nested.composites is a query-level group, whatever composite says.
+	isComposite := config.IsComposite
+	if compositeStructRegistry[rootStruct] == nil {
+		isComposite = new(bool)
+	}
+
 	assigner := &structInEmbedAssigner{b: b, query: query.MethodName}
 	nestedStructData, err := b.buildNestedStructData(
 		query.MethodName,
@@ -231,7 +323,7 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedData(query *Query, config *o
 			FieldGroupBy: rootField,
 			StructIn:     rootStruct,
 			StructOut:    rootStruct,
-			IsComposite:  config.IsComposite,
+			IsComposite:  isComposite,
 		},
 		nil,
 		structFields,
@@ -282,6 +374,11 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 	// Determine if this struct should reuse an existing entity struct
 	isEntity := b.shouldReuseEntityStruct(config.StructOut, config.StructIn, config)
 
+	// Grouping keeps filling a composite after its parent took it; a value copy would miss that.
+	if !config.GetIsPointer() && !isEntity && parent != nil {
+		return nil, fmt.Errorf("nested %s: pointer: false is supported only for entity children, not %s, which is filled while grouping", queryName, config.StructOut)
+	}
+
 	// Generate field name based on FieldOut if specified, otherwise use slice setting with proper pluralization
 	fieldName := getFieldNameFromNestedConfig(config)
 
@@ -304,8 +401,9 @@ func (b *NestedQueryTemplateDataBuilder) buildNestedStructData(
 	// Mark composite struct as already generated if it's the root of the current query or
 	// parent is not skipped to render non-root compoiste in the same file as parent and it's free
 	// (no one takes it to generate in another file)
-	if isRootConfig || (!willBeGeneratedInAnotherFile && compositeStructRegistry[config.StructOut] != nil && !parent.SkipStructGeneration) {
-		compositeStructRegistry[config.StructOut].IsStructAlreadyGenerated = true
+	// A query-level root (queries[].group) has no registry entry.
+	if reg := compositeStructRegistry[config.StructOut]; reg != nil && (isRootConfig || (!willBeGeneratedInAnotherFile && !parent.SkipStructGeneration)) {
+		reg.IsStructAlreadyGenerated = true
 	}
 
 	// sqlc result struct field name: struct_in, or struct_in_<digits> for duplicate embeds
@@ -385,8 +483,15 @@ func updateDuplicatesFromNodePerspective(current *NestedStructData, ancestors []
 		return
 	}
 
+	siblingsByStructOut := make(map[string]int)
+	for _, nestedStruct := range current.NestedStructs {
+		siblingsByStructOut[nestedStruct.StructOut]++
+	}
+
 	// For each nested struct (child), check duplicates from its perspective
 	for _, nestedStruct := range current.NestedStructs {
+		nestedStruct.SiblingDuplicate = siblingsByStructOut[nestedStruct.StructOut] > 1
+
 		// Initialize the map in place if needed
 		if nestedStruct.DuplicatedRelativeToParents == nil {
 			nestedStruct.DuplicatedRelativeToParents = make(map[int]bool)

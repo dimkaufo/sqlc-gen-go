@@ -190,6 +190,10 @@ func (b *NestedQueryTemplateDataBuilder) buildResolvedMatches(
 
 // resolveMatchSideStructNameForMatch maps match from_struct/to_struct to sqlc row field names for getters, using qualifying row field names (qualifyingRowFieldNamesForStructIn).
 func resolveMatchSideStructNameForMatch(node *NestedStructData, name string) string {
+	// from_struct defaults to the node's own struct_in: a second embed of it is RowFieldName (RecruiterAccount_2).
+	if name != "" && name == node.StructIn && node.RowFieldName != "" {
+		return node.RowFieldName
+	}
 	if resolved := lookupResolvedRowFieldNameInNestedSubtree(node, name); resolved != "" {
 		return resolved
 	}

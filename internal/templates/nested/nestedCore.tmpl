@@ -116,7 +116,10 @@
   {{- $nextPrefix := $prefix -}}
   {{- /* Check if StructOut is duplicated at this level to determine if we need a prefix */ -}}
   {{- $isDuplicated := index $currentStruct.DuplicatedRelativeToParents $level -}}
-  {{- if and $isDuplicated (eq $prefix "") -}}
+  {{- if $currentStruct.SiblingDuplicate -}}
+    {{- /* Siblings share the parent prefix; the field name tells them apart */ -}}
+    {{- $nextPrefix = printf "%s%s" (ternary (eq $prefix "") $parentStructPrefix $prefix) ($currentStruct.FieldName | upperTitle) -}}
+  {{- else if and $isDuplicated (eq $prefix "") -}}
     {{- $nextPrefix = $parentStructPrefix -}}
   {{- end -}}
 
@@ -366,11 +369,16 @@
         {{- end}}
 
         if (shouldPopulate) {
+          {{- if $currentStruct.InlinePopulate }}
+          // Inline: the shared populate{{$currentStruct.StructOut}} reads other row fields than this occurrence
+          {{- template "nestedGrouperRecursiveContent" (list . (add $level 1) $nextPrefix) }}
+          {{- else }}
           populate{{$currentStruct.StructOut}}(
           {{$currentStructMapItem}}, 
           &{{- template "generateInitPopulateMapsStruct" (list . 1 (add $level 1) "maps" "" $nextPrefix) -}}, 
             row,
           )
+          {{- end }}
         }
         {{- end -}}
       {{- else }}
@@ -420,7 +428,8 @@
   {{- $options := index . 1 -}}
   {{- $modelsPackage := $options.OutputModelsPackage -}}
 
-  {{- if $parentStruct.IsRoot }}
+  {{- /* A query-level root (queries[].group) is no composite: nothing builds it from an entity */ -}}
+  {{- if and $parentStruct.IsRoot $parentStruct.IsComposite }}
     {{- template "generatePopulateCompositeFromEntityFunction" (list $parentStruct $options) }}
   {{- end}}
   
@@ -480,7 +489,7 @@
         {{- $CurrentStructName := printf "%s" (ternary .IsEntityStruct (printf "entity.%s" $entityTypeName) .StructOut) }}
 
         // {{$functionName}} gets or creates a {{.StructOut}} within the {{.StructOut}} structure
-        func {{$functionName}}(parent *{{$ParentStructName}}, {{$currentStructMap}} map[{{$currentStruct.KeyType}}]*{{$CurrentStructName}}, {{$currentStructInItem}} *entity.{{.StructIn}}) *{{$CurrentStructName}} {
+        func {{$functionName}}(parent *{{$ParentStructName}}, {{$currentStructMap}} map[{{$currentStruct.KeyType}}]*{{$CurrentStructName}}, {{$currentStructInItem}} *entity.{{$entityTypeName}}) *{{$CurrentStructName}} {
           // Check if entity already exists in map correspoding to parent slice
           if entity, exists := {{$currentStructMap}}[{{$currentStructInItem}}.{{$currentStruct.FieldGroupBy}}]; exists {
             return entity
@@ -500,7 +509,10 @@
         
           {{ if .IsSlice}}
             // Add to slice
-            parent.{{.FieldName}} = append(parent.{{.FieldName}}, entity)
+            parent.{{.FieldName}} = append(parent.{{.FieldName}}, {{if not .IsPointer}}*{{end}}entity)
+          {{ else if not .IsPointer}}
+            // Value field: copy the entity in
+            parent.{{.FieldName}} = *entity
           {{ else}}
             // Sent parent entity if not already set
             if parent.{{.FieldName}} != nil && parent.{{.FieldName}}.{{$currentStruct.FieldGroupBy}} == entity.{{$currentStruct.FieldGroupBy}} {
