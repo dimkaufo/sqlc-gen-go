@@ -241,6 +241,11 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			Table:        query.InsertIntoTable,
 		}
 		sqlpkg := parseDriver(options.SqlPackage)
+		execMode, err := queryExecMode(query.Name, query.Cmd, query.Comments, sqlpkg)
+		if err != nil {
+			return nil, err
+		}
+		gq.ExecMode = execMode
 
 		qpl := int(*options.QueryParameterLimit)
 

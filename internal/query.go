@@ -274,6 +274,8 @@ type Query struct {
 	EmitResultStructPointers bool   // Whether to emit pointer types for result structs
 	IsStructRootReuse        bool   // Whether this query reuses a struct_root from another query
 	OriginalGroupFunction    string // Name of the original group function to reuse (e.g., "GroupGetJobseekerByID")
+	// ExecMode is the pgx exec mode passed ahead of the params ("" = the pool default); see queryExecMode.
+	ExecMode string
 }
 
 func (q Query) hasRetType() bool {

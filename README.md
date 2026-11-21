@@ -26,6 +26,25 @@ sql:
       sql_package: pgx/v5
 ```
 
+## Per-query plan: `-- plan: custom`
+
+With `sql_package: pgx/v5` every query runs as a named prepared statement, and after five
+executions Postgres may switch it to a cached *generic* plan that ignores the parameter values.
+A query whose best plan depends on them (optional `(@x IS NULL OR col = @x)` filters, a scope
+that is a team or a single author) can then pick a far worse plan. Mark it in its comments:
+
+```sql
+-- name: SearchUsers :many
+-- plan: custom: optional filters, planned for each call's values.
+SELECT * FROM users
+WHERE (sqlc.narg('name')::text IS NULL OR name = sqlc.narg('name'))
+LIMIT @limit_count;
+```
+
+The generated method passes `pgx.QueryExecModeCacheDescribe` ahead of the params: pgx runs the
+query as the unnamed statement, which Postgres plans with each call's values. Any other
+`plan:` value, another `sql_package`, or a `:batch*`/`:copyfrom` query is a generation error.
+
 ## Building from source
 
 Assuming you have the Go toolchain set up, from the project root you can simply `make all`.

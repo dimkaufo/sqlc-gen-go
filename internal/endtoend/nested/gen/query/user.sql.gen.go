@@ -103,8 +103,9 @@ func (r ListUsersRow) GetImage() entity.Image {
 }
 
 // Second query on the same struct_root: emits a wrapper over GroupGetUserByID.
+// plan: custom (no params: the exec mode is the only call argument)
 func (q *Queries) ListUsers(ctx context.Context) ([]*UserComposite, error) {
-	rows, err := q.db.Query(ctx, listUsers)
+	rows, err := q.db.Query(ctx, listUsers, pgx.QueryExecModeCacheDescribe)
 	if err != nil {
 		return nil, err
 	}
@@ -139,4 +140,42 @@ func (q *Queries) ListUsers(ctx context.Context) ([]*UserComposite, error) {
 		return nil, err
 	}
 	return GroupListUsers(items), nil
+}
+
+const searchUsers = `-- name: SearchUsers :many
+SELECT id, name, avatar_id
+FROM users
+WHERE ($1::text IS NULL OR name = $1)
+ORDER BY id
+LIMIT $2
+`
+
+type SearchUsersParams struct {
+	Name       pgtype.Text
+	LimitCount int32
+}
+
+// plan: custom: an optional filter, planned for each call's value.
+func (q *Queries) SearchUsers(ctx context.Context, arg *SearchUsersParams) ([]*entity.User, error) {
+	rows, err := q.db.Query(ctx, searchUsers, pgx.QueryExecModeCacheDescribe, arg.Name, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*entity.User
+	for rows.Next() {
+		var i entity.User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.AvatarID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

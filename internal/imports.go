@@ -458,6 +458,14 @@ func (i *importer) queryImports(filename string) fileImports {
 		std["fmt"] = struct{}{}
 	}
 
+	// A "-- plan: custom" query names pgx.QueryExecMode* (see queryExecMode).
+	for _, q := range gq {
+		if q.ExecMode != "" {
+			pkg[ImportSpec{Path: "github.com/jackc/pgx/v5"}] = struct{}{}
+			break
+		}
+	}
+
 	// Grouped :one returns pgx.ErrNoRows / a fmt error itself (see pgx queryCode.tmpl).
 	if sqlpkg.IsPGX() {
 		for _, q := range gq {

@@ -76,10 +76,10 @@ type {{.Ret.Type}} struct { {{- range .Ret.Struct.Fields}}
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
-	rows, err := db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	rows, err := db.Query(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
-	rows, err := q.db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	rows, err := q.db.Query(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- end}}
 	var zero {{.FinalSingleReturnType}}
 	if err != nil {
@@ -133,10 +133,10 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
-	row := db.QueryRow(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	row := db.QueryRow(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalSingleReturnType}}, error) {
-	row := q.db.QueryRow(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	row := q.db.QueryRow(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- end}}
 	{{- if or (ne .Arg.Pair .Ret.Pair) (ne .Arg.DefineType .Ret.DefineType) }}
 	var {{.Ret.Name}} {{.Ret.Type}}
@@ -175,10 +175,10 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) ({{.FinalSliceReturnType}}, error) {
-	rows, err := db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	rows, err := db.Query(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalSliceReturnType}}, error) {
-	rows, err := q.db.Query(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	rows, err := q.db.Query(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- end}}
 	if err != nil {
 		return nil, {{if $.WrapErrors}}fmt.Errorf("query {{.MethodName}}: %w", err){{else}}err{{end}}
@@ -233,10 +233,10 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) ({{.FinalS
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) error {
-	_, err := db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	_, err := db.Exec(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) error {
-	_, err := q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	_, err := q.db.Exec(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- end}}
 	{{- if $.WrapErrors }}
 	if err != nil {
@@ -254,10 +254,10 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) error {
 {{end -}}
 {{if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) (int64, error) {
-	result, err := db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	result, err := db.Exec(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) (int64, error) {
-	result, err := q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	result, err := q.db.Exec(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- end}}
 	if err != nil {
 		return 0, {{if $.WrapErrors}}fmt.Errorf("query {{.MethodName}}: %w", err){{else}}err{{end}}
@@ -271,10 +271,10 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) (int64, er
 {{end -}}
 {{- if $.EmitMethodsWithDBArgument -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, db DBTX, {{.Arg.Pair}}) (pgconn.CommandTag, error) {
-	{{queryRetval .}} db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	{{queryRetval .}} db.Exec(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- else -}}
 func (q *Queries) {{.MethodName}}(ctx context.Context, {{.Arg.Pair}}) (pgconn.CommandTag, error) {
-	{{queryRetval .}} q.db.Exec(ctx, {{.ConstantName}}, {{.Arg.Params}})
+	{{queryRetval .}} q.db.Exec(ctx, {{.ConstantName}}, {{.CallParams}})
 {{- end}}
 	{{- if $.WrapErrors}}
 	if err != nil {
